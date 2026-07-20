@@ -1,0 +1,25 @@
+[Unit]
+Description=Worqi production API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/worqi/current
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/worqi/current/src/server.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/worqi/shared/uploads
+
+[Install]
+WantedBy=multi-user.target

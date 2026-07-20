@@ -46,12 +46,12 @@ const sendUserInvitationEmail = async ({ user, plainPassword }) => {
   }
 
   const userId = user.id || user._id.toString();
-  const subject = 'Your Yemden account is ready';
+  const subject = 'Your Worqi account is ready';
   const loginUrl = env.APP_URL;
   const lines = [
     `Hello ${user.name},`,
     '',
-    'Your Yemden task management account has been created.',
+    'Your Worqi account has been created.',
     '',
     `Site link: ${loginUrl}`,
     `Login email: ${user.email}`,
@@ -80,7 +80,7 @@ const sendUserInvitationEmail = async ({ user, plainPassword }) => {
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.5;">
           <p>Hello ${escapeHtml(user.name)},</p>
-          <p>Your Yemden task management account has been created.</p>
+          <p>Your Worqi account has been created.</p>
           <table cellpadding="6" cellspacing="0" style="border-collapse: collapse;">
             ${htmlRows
               .map(

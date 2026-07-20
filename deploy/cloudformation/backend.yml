@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Worqi production API infrastructure in Mumbai
+
+Parameters:
+  AmiId:
+    Type: AWS::EC2::Image::Id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  ApiDomainName:
+    Type: String
+    Default: api.worqi.yemden.com
+  InstanceProfileName:
+    Type: String
+    Default: worqi-ec2-role
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues:
+      - t4g.micro
+      - t4g.small
+      - t4g.medium
+  DeploymentBucketName:
+    Type: String
+  BackendSecretName:
+    Type: String
+    Default: worqi/production/backend
+
+Resources:
+  ApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP and HTTPS access for the Worqi API
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP for redirect and certificate issuance
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS API traffic
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: worqi-api-sg
+        - Key: Project
+          Value: Worqi
+        - Key: Environment
+          Value: Production
+
+  ApiInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfileName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          DeviceIndex: '0'
+          GroupSet:
+            - !Ref ApiSecurityGroup
+          SubnetId: !Ref SubnetId
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: 30
+            VolumeType: gp3
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf install -y nginx git tar gzip jq amazon-cloudwatch-agent
+          curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
+          dnf install -y nodejs
+          npm install --global pm2
+          install -d -o ec2-user -g ec2-user /opt/worqi/releases
+          install -d -o ec2-user -g ec2-user /opt/worqi/shared/uploads
+          systemctl enable --now nginx
+          systemctl enable --now amazon-ssm-agent
+      Tags:
+        - Key: Name
+          Value: worqi-api
+        - Key: Project
+          Value: Worqi
+        - Key: Environment
+          Value: Production
+
+  ApiElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: worqi-api-eip
+        - Key: Project
+          Value: Worqi
+        - Key: Environment
+          Value: Production
+
+  ApiElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ApiElasticIp.AllocationId
+      InstanceId: !Ref ApiInstance
+
+  ApiDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ApiDomainName
+      ResourceRecords:
+        - !GetAtt ApiElasticIp.PublicIp
+      TTL: '60'
+      Type: A
+
+  DeploymentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref DeploymentBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldDeploymentArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+      Tags:
+        - Key: Project
+          Value: Worqi
+        - Key: Environment
+          Value: Production
+
+  BackendSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Ref BackendSecretName
+      Description: Worqi production backend environment
+      GenerateSecretString:
+        SecretStringTemplate: '{"bootstrap":true}'
+        GenerateStringKey: bootstrapToken
+        PasswordLength: 32
+      Tags:
+        - Key: Project
+          Value: Worqi
+        - Key: Environment
+          Value: Production
+
+  BackendSecretPolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      BlockPublicPolicy: true
+      SecretId: !Ref BackendSecret
+      ResourcePolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowWorqiEc2Read
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${InstanceProfileName}'
+            Action: secretsmanager:GetSecretValue
+            Resource: '*'
+
+Outputs:
+  InstanceId:
+    Value: !Ref ApiInstance
+  ElasticIp:
+    Value: !GetAtt ApiElasticIp.PublicIp
+  ApiDomainName:
+    Value: !Ref ApiDomainName
+  SecurityGroupId:
+    Value: !Ref ApiSecurityGroup
+  DeploymentBucketName:
+    Value: !Ref DeploymentBucket
+  BackendSecretArn:
+    Value: !Ref BackendSecret

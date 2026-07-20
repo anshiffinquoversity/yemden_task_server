@@ -62,6 +62,21 @@ const registerPushToken = async (req, res) => {
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );
 
+  // The desktop MVP keeps one active browser endpoint per user. This removes
+  // tokens left behind by service-worker changes or other browser profiles,
+  // preventing one reminder phase from producing several desktop popups.
+  if (platform === 'web') {
+    await PushToken.updateMany(
+      {
+        user: req.user._id,
+        platform: 'web',
+        token: { $ne: token },
+        isActive: true,
+      },
+      { $set: { isActive: false } }
+    );
+  }
+
   res.status(201).json({ token: pushToken });
 };
 

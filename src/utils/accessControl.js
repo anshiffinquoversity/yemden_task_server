@@ -20,6 +20,9 @@ const hasAssignedUser = (taskOrAssignedTo, userId) => {
   );
 };
 
+const isTaskCreator = (task, userId) =>
+  Boolean(task?.createdBy) && sameId(task.createdBy, userId);
+
 const priorityAccessRank = (user) => accessRank[user?.priorityAccess] ?? accessRank.medium;
 
 const hasPriorityAccess = (user, level) => {
@@ -88,13 +91,23 @@ const canManageTaskWork = (user, project) => {
   return canViewProject(user, project);
 };
 
+const canEditTask = (user, task) => {
+  if (isAdmin(user)) return true;
+  if (isManager(user)) {
+    return Boolean(task?.project) && canManageProjectWork(user, task.project);
+  }
+  return isHighAccessEmployee(user) && isTaskCreator(task, user._id);
+};
+
 const canUpdateTaskStatus = (user, task) => {
   if (isAdmin(user)) return true;
   if (isManager(user))
     return Boolean(task.project) && canManageProjectWork(user, task.project);
-  if (isHighAccessEmployee(user))
-    return Boolean(task.project) && canManageTaskWork(user, task.project);
-  return hasAssignedUser(task, user._id);
+  if (!isEmployee(user)) return false;
+  return (
+    hasAssignedUser(task, user._id) ||
+    (isHighAccessEmployee(user) && isTaskCreator(task, user._id))
+  );
 };
 
 const canCancelTasks = (user) => isAdmin(user) || isManager(user);
@@ -135,11 +148,13 @@ module.exports = {
   hasPriorityAccess,
   isHighAccessEmployee,
   hasAssignedUser,
+  isTaskCreator,
   getProjectQueryForUser,
   getTaskQueryForUser,
   canViewProject,
   canManageProjectWork,
   canManageTaskWork,
+  canEditTask,
   canUpdateTaskStatus,
   canCancelTasks,
   combineQuery,

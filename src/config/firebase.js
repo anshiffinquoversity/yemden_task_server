@@ -1,4 +1,9 @@
-const admin = require('firebase-admin');
+const {
+  applicationDefault,
+  cert,
+  initializeApp,
+} = require('firebase-admin/app');
+const { getMessaging } = require('firebase-admin/messaging');
 const { env } = require('./env');
 
 let firebaseApp = null;
@@ -20,12 +25,12 @@ const getFirebaseApp = () => {
 
   try {
     const credential = hasFirebaseConfig()
-      ? admin.credential.cert({
+      ? cert({
           projectId: env.FIREBASE_PROJECT_ID,
           clientEmail: env.FIREBASE_CLIENT_EMAIL,
           privateKey: env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
         })
-      : admin.credential.applicationDefault();
+      : applicationDefault();
 
     if (!hasFirebaseConfig() && !missingConfigWarned) {
       console.warn(
@@ -34,7 +39,7 @@ const getFirebaseApp = () => {
       missingConfigWarned = true;
     }
 
-    firebaseApp = admin.initializeApp({
+    firebaseApp = initializeApp({
       credential,
       projectId: env.FIREBASE_PROJECT_ID || undefined,
     });
@@ -47,7 +52,7 @@ const getFirebaseApp = () => {
 
 const getFirebaseMessaging = () => {
   const app = getFirebaseApp();
-  return app ? admin.messaging(app) : null;
+  return app ? getMessaging(app) : null;
 };
 
 module.exports = {

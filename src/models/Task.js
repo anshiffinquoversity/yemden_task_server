@@ -37,6 +37,7 @@ const taskSchema = new mongoose.Schema(
     startDate: Date,
     dueDate: Date,
     reminderAt: Date,
+    reminderLeadSentAt: Date,
     reminderSentAt: Date,
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -49,6 +50,7 @@ const taskSchema = new mongoose.Schema(
 taskSchema.index({ status: 1, startDate: 1 });
 taskSchema.index({ status: 1, dueDate: 1 });
 taskSchema.index({ assignedTo: 1 });
+taskSchema.index({ reminderAt: 1, reminderLeadSentAt: 1 });
 taskSchema.index({ reminderAt: 1, reminderSentAt: 1 });
 
 taskSchema.set("toJSON", {

@@ -1,0 +1,13 @@
+[Unit]
+Description=Publish the Worqi public API health metric
+After=network-online.target worqi-api.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=AWS_DEFAULT_REGION=ap-south-1
+ExecStart=/usr/local/bin/worqi-api-healthcheck
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict

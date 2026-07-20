@@ -6,6 +6,7 @@ const { createUserNotifications } = require('./notificationService');
 const { getTaskStatusKeysByCategory } = require('../utils/taskStatusCatalog');
 
 const DEFAULT_INTERVAL_MS = 30 * 1000;
+const REMINDER_LEAD_MS = 60 * 1000;
 const REMINDER_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 25;
 
@@ -17,37 +18,54 @@ const normalizeIds = (values) =>
     .map((value) => value?._id || value)
     .filter(Boolean);
 
-const reminderMessage = (task) => {
+const reminderMessage = (task, phase) => {
   const projectTitle = task.project?.title ? ` in ${task.project.title}` : '';
-  return `Reminder: "${task.title}"${projectTitle} is due for your attention.`;
+  if (phase === 'upcoming') {
+    return `Reminder: "${task.title}"${projectTitle} is due in 1 minute.`;
+  }
+  return `Reminder: "${task.title}"${projectTitle} is due now.`;
 };
 
-const buildReminderQuery = async (now) => {
+const buildReminderQuery = (now, canceledStatusKeys, phase) => {
   const cutoff = new Date(now.getTime() - REMINDER_LOOKBACK_MS);
-  const canceledStatusKeys = await getTaskStatusKeysByCategory('canceled');
+  const leadWindowEnd = new Date(now.getTime() + REMINDER_LEAD_MS);
 
-  return {
-    reminderAt: { $ne: null, $lte: now, $gte: cutoff },
+  const query = {
     reminderSentAt: null,
     status: { $nin: canceledStatusKeys },
   };
+
+  if (phase === 'upcoming') {
+    return {
+      ...query,
+      reminderAt: { $ne: null, $gt: now, $lte: leadWindowEnd },
+      reminderLeadSentAt: null,
+    };
+  }
+
+  return {
+    ...query,
+    reminderAt: { $ne: null, $lte: now, $gte: cutoff },
+  };
 };
 
-const claimReminder = async (taskId, sentAt) => {
+const claimReminder = async (taskId, phase, sentAt) => {
+  const sentField =
+    phase === 'upcoming' ? 'reminderLeadSentAt' : 'reminderSentAt';
   const result = await Task.updateOne(
-    { _id: taskId, reminderSentAt: null },
-    { $set: { reminderSentAt: sentAt } }
+    { _id: taskId, [sentField]: null, reminderSentAt: null },
+    { $set: { [sentField]: sentAt } }
   );
   return result.modifiedCount === 1;
 };
 
-const sendTaskReminder = async (task) => {
+const sendTaskReminder = async (task, phase) => {
   const recipients = normalizeIds(
     task.assignedTo?.length ? task.assignedTo : task.createdBy
   );
   const sentAt = new Date();
 
-  if (!(await claimReminder(task._id, sentAt))) {
+  if (!(await claimReminder(task._id, phase, sentAt))) {
     return false;
   }
 
@@ -61,11 +79,13 @@ const sendTaskReminder = async (task) => {
     task,
     project: task.project?._id || task.project || null,
     type: 'task_reminder',
-    title: 'Task reminder',
-    message: reminderMessage(task),
+    title: phase === 'upcoming' ? 'Task reminder soon' : 'Task reminder',
+    message: reminderMessage(task, phase),
     command: 'Open the task to review the details.',
     data: {
-      event: 'task_reminder',
+      event:
+        phase === 'upcoming' ? 'task_reminder_upcoming' : 'task_reminder_due',
+      reminderPhase: phase,
       reminderAt: task.reminderAt?.toISOString(),
     },
   });
@@ -78,20 +98,28 @@ const checkDueTaskReminders = async () => {
   running = true;
 
   try {
-    const now = new Date();
-    const query = await buildReminderQuery(now);
-    const tasks = await Task.find(query)
-      .sort({ reminderAt: 1, createdAt: 1 })
-      .limit(BATCH_SIZE)
-      .populate('project', 'title')
-      .lean();
-
+    const checkedAt = new Date();
+    const canceledStatusKeys = await getTaskStatusKeysByCategory('canceled');
     let sent = 0;
-    for (const task of tasks) {
-      try {
-        if (await sendTaskReminder(task)) sent += 1;
-      } catch (error) {
-        console.warn(`Task reminder failed for ${task._id}: ${error.message}`);
+    let checked = 0;
+
+    for (const phase of ['upcoming', 'due']) {
+      const query = buildReminderQuery(checkedAt, canceledStatusKeys, phase);
+      const tasks = await Task.find(query)
+        .sort({ reminderAt: 1, createdAt: 1 })
+        .limit(BATCH_SIZE)
+        .populate('project', 'title')
+        .lean();
+
+      checked += tasks.length;
+      for (const task of tasks) {
+        try {
+          if (await sendTaskReminder(task, phase)) sent += 1;
+        } catch (error) {
+          console.warn(
+            `Task ${phase} reminder failed for ${task._id}: ${error.message}`
+          );
+        }
       }
     }
 
@@ -99,7 +127,7 @@ const checkDueTaskReminders = async () => {
       console.log(`Task reminder worker sent ${sent} reminder(s).`);
     }
 
-    return { checked: tasks.length, sent, skipped: false };
+    return { checked, sent, skipped: false };
   } finally {
     running = false;
   }

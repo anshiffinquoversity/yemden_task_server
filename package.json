@@ -1,14 +1,19 @@
 {
   "name": "yemden-task-management-backend",
   "version": "1.0.0",
-  "description": "Node.js, Express, and MongoDB API for the Yemden task management MVP.",
+  "description": "Node.js, Express, and MongoDB API for the Worqi task management MVP.",
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
     "dev:nodemon": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed:admin": "node src/seed/seedAdmin.js",
-    "check": "node --check src/server.js"
+    "migrate:upload-origins": "node src/migrations/migrateUploadOrigins.js",
+    "check": "node scripts/checkSyntax.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24 <25"
   },
   "keywords": [],
   "author": "",
@@ -19,7 +24,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
-    "firebase-admin": "^13.10.0",
+    "firebase-admin": "14.2.0",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.3",

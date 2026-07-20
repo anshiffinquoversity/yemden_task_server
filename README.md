@@ -50,6 +50,7 @@ ADMIN_NAME=Admin
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=Admin@12345
 APP_URL=https://march-depth-abreast.ngrok-free.dev/#/login?from=/dashboard
+CORS_ORIGINS=http://localhost:8080
 
 # Optional SMTP settings for user invitation emails.
 SMTP_HOST=
@@ -124,7 +125,38 @@ curl http://localhost:5001/api/auth/me \
 npm run dev        # start backend with auto-restart using node --watch
 npm start          # start backend normally
 npm run seed:admin # create/update default admin user
-npm run check      # quick JavaScript syntax check for the server entry
+npm run check      # JavaScript syntax checks for production entry points
+npm test           # configuration and deployment-safety tests
+```
+
+## Production Deployment Helpers
+
+Production deployment templates live in `deploy/`:
+
+- `deploy/production.env.example` lists the required production variables.
+- `deploy/nginx/yemden-api.conf.example` proxies HTTPS traffic to Node on port 5001.
+- `ecosystem.config.js` runs exactly one API process so the local uploads folder and reminder worker remain consistent.
+
+The server refuses to start with `NODE_ENV=production` when required secrets,
+HTTPS URLs, or allowed CORS origins are missing or unsafe.
+
+### Migrate old upload URLs
+
+After backing up and restoring MongoDB, preview old localhost/ngrok upload URLs:
+
+```bash
+UPLOAD_PUBLIC_ORIGIN=https://api.example.com \
+LEGACY_UPLOAD_ORIGINS=http://localhost:5001,https://march-depth-abreast.ngrok-free.dev \
+npm run migrate:upload-origins
+```
+
+The command is a dry run by default. Apply only after verifying the backup and
+reported counts:
+
+```bash
+UPLOAD_PUBLIC_ORIGIN=https://api.example.com \
+LEGACY_UPLOAD_ORIGINS=http://localhost:5001,https://march-depth-abreast.ngrok-free.dev \
+npm run migrate:upload-origins -- --apply
 ```
 
 ## Main API Paths

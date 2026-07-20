@@ -16,6 +16,7 @@ const {
   getTaskQueryForUser,
   canManageProjectWork,
   canManageTaskWork,
+  canEditTask,
   canUpdateTaskStatus,
   combineQuery,
 } = require("../utils/accessControl");
@@ -72,6 +73,13 @@ const populateTask = (query) =>
 
 const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   if (previousStatus === statusKey) return;
+
+  if (isManagerOnlyTaskStatusKey(previousStatus) && !isAdmin(user)) {
+    throw new ApiError(
+      403,
+      "Published task status can only be changed by an admin",
+    );
+  }
 
   if (
     isManagerOnlyTaskStatusKey(statusKey) &&
@@ -355,6 +363,7 @@ const createTask = async (req, res) => {
     startDate: parseOptionalDate(req.body.startDate),
     dueDate: parseOptionalDate(req.body.dueDate),
     reminderAt: parseReminderDate(req.body.reminderAt),
+    reminderLeadSentAt: null,
     reminderSentAt: null,
     createdBy: req.user._id,
   });
@@ -449,7 +458,7 @@ const updateTask = async (req, res) => {
     throw new ApiError(404, "Task not found");
   }
 
-  if (!canManageTaskWork(req.user, task.project)) {
+  if (!canEditTask(req.user, task)) {
     throw new ApiError(403, "You cannot edit this task");
   }
 
@@ -514,6 +523,7 @@ const updateTask = async (req, res) => {
     if (!sameDateTime(previousReminderAt, nextReminderAt)) {
       ensureFutureReminder(nextReminderAt);
       task.reminderAt = nextReminderAt;
+      task.reminderLeadSentAt = null;
       task.reminderSentAt = null;
     }
   }

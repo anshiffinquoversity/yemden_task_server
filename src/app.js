@@ -13,6 +13,8 @@ const taskRoutes = require('./routes/taskRoutes');
 const taskStatusRoutes = require('./routes/taskStatusRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const { env } = require('./config/env');
+const { createCorsOriginHandler } = require('./config/cors');
 const { notFound, errorMiddleware } = require('./middleware/errorMiddleware');
 
 const app = express();
@@ -34,19 +36,16 @@ app.use(
 );
 app.use(
   cors({
-    origin(origin, callback) {
-      if (!origin) return callback(null, true);
-      if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-        return callback(null, true);
-      }
-      return callback(null, true);
-    },
+    origin: createCorsOriginHandler({
+      nodeEnv: env.NODE_ENV,
+      allowedOrigins: env.CORS_ORIGINS,
+    }),
     credentials: true,
   })
 );
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('dev'));
+app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 app.use(
   rateLimit({
@@ -84,7 +83,7 @@ if (fs.existsSync(frontendIndexPath)) {
   });
 } else {
   app.get('/', (_req, res) => {
-    res.json({ message: 'Yemden Task Management API is running' });
+    res.json({ message: 'Worqi API is running' });
   });
 }
 
