@@ -9,6 +9,12 @@ const {
   sendCreated,
 } = require("../utils/http");
 const {
+  parsePageSize,
+  decodeCursor,
+  descendingCursorFilter,
+  pageFromResults,
+} = require("../utils/pagination");
+const {
   isAdmin,
   isManager,
   isEmployee,
@@ -24,7 +30,7 @@ const {
   validStatusCategories,
   resolveTaskStatusKey,
   getTaskStatusKeysByCategory,
-  isManagerOnlyTaskStatusKey,
+  canEmployeeChangeTaskStatus,
   enrichTaskWithStatusInfo,
   enrichTasksWithStatusInfo,
 } = require("../utils/taskStatusCatalog");
@@ -36,8 +42,14 @@ const {
   userLabel,
 } = require("../services/taskCollaborationService");
 const { createUserNotifications } = require("../services/notificationService");
+const { ensureTaskHasPublishedAsset } = require("../services/taskPublicationService");
 
 const validPriorities = ["low", "medium", "high"];
+const excludedOverdueStatusKeys = new Set([
+  "canceled",
+  "cancelled",
+  "deleted",
+]);
 
 const ensureFutureReminder = (date) => {
   if (!date) return;
@@ -67,26 +79,29 @@ const isTruthyQueryValue = (value) => {
 
 const populateTask = (query) =>
   query
+    .select('-reminderLeadSentAt -reminderSentAt')
     .populate("project", "title status color logoUrl owner members")
+    .populate("assignedTo", "name email role status")
+    .populate("createdBy", "name email role");
+
+const populateTaskList = (query) =>
+  query
+    .select('-reminderLeadSentAt -reminderSentAt')
+    .populate("project", "title status color logoUrl")
     .populate("assignedTo", "name email role status")
     .populate("createdBy", "name email role");
 
 const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   if (previousStatus === statusKey) return;
 
-  if (isManagerOnlyTaskStatusKey(previousStatus) && !isAdmin(user)) {
+  if (
+    isEmployee(user) &&
+    !canEmployeeChangeTaskStatus(previousStatus, statusKey)
+  ) {
     throw new ApiError(
       403,
-      "Published task status can only be changed by an admin",
+      "Employees cannot change the status of a published or delivered task",
     );
-  }
-
-  if (
-    isManagerOnlyTaskStatusKey(statusKey) &&
-    !isAdmin(user) &&
-    !isManager(user)
-  ) {
-    throw new ApiError(403, "Only managers and admins can publish tasks");
   }
 
   const canceledStatusKeys = await getTaskStatusKeysByCategory("canceled");
@@ -275,7 +290,24 @@ const buildFilters = async (query) => {
     filters.project = query.project;
   }
 
-  if (query.status) {
+  if (query.statuses) {
+    const requestedStatuses = [
+      ...new Set(
+        String(query.statuses)
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (requestedStatuses.length < 1 || requestedStatuses.length > 10) {
+      throw new ApiError(400, "statuses must contain from 1 to 10 values");
+    }
+    filters.status = {
+      $in: await Promise.all(
+        requestedStatuses.map((status) => resolveTaskStatusKey(status)),
+      ),
+    };
+  } else if (query.status) {
     filters.status = await resolveTaskStatusKey(query.status);
   } else if (query.statusCategory) {
     if (!validStatusCategories.includes(query.statusCategory)) {
@@ -306,7 +338,12 @@ const buildFilters = async (query) => {
 
   if (isTruthyQueryValue(query.overdue)) {
     if (!filters.status) {
-      filters.status = { $in: await getTaskStatusKeysByCategory("open") };
+      const openStatusKeys = await getTaskStatusKeysByCategory("open");
+      filters.status = {
+        $in: openStatusKeys.filter(
+          (statusKey) => !excludedOverdueStatusKeys.has(statusKey),
+        ),
+      };
     }
     filters.dueDate = { $lt: startOfToday() };
   } else if (query.startDate) {
@@ -352,6 +389,12 @@ const createTask = async (req, res) => {
   );
   const statusKey = await resolveTaskStatusKey(status || "open");
   await ensureUserCanSetTaskStatus(req.user, statusKey);
+  if (statusKey === "published") {
+    throw new ApiError(
+      400,
+      "Create the task first, add attachments, and publish at least one attachment before publishing the task",
+    );
+  }
 
   const task = await Task.create({
     title: String(title).trim(),
@@ -402,14 +445,21 @@ const createTask = async (req, res) => {
 const listTasks = async (req, res) => {
   const visibilityQuery = await getTaskQueryForUser(req.user);
   const filters = await buildFilters(req.query);
-  const tasks = await populateTask(
-    Task.find(combineQuery(visibilityQuery, filters)),
-  ).sort({
-    startDate: 1,
-    createdAt: -1,
-  });
+  const limit = parsePageSize(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const query = combineQuery(
+    combineQuery(visibilityQuery, filters),
+    descendingCursorFilter(cursor),
+  );
+  const results = await populateTaskList(Task.find(query))
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1);
+  const page = pageFromResults(results, limit);
 
-  res.json({ tasks: await enrichTasksWithStatusInfo(tasks) });
+  res.json({
+    tasks: await enrichTasksWithStatusInfo(page.items),
+    pageInfo: page.pageInfo,
+  });
 };
 
 const getTaskById = async (req, res) => {
@@ -431,22 +481,39 @@ const listTasksByProject = async (req, res) => {
   assertObjectId(req.params.projectId, "project id");
 
   const visibilityQuery = await getTaskQueryForUser(req.user);
-  const tasks = await populateTask(
-    Task.find(combineQuery(visibilityQuery, { project: req.params.projectId })),
-  ).sort({ startDate: 1, createdAt: -1 });
+  const limit = parsePageSize(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const query = combineQuery(
+    combineQuery(visibilityQuery, { project: req.params.projectId }),
+    descendingCursorFilter(cursor),
+  );
+  const results = await populateTaskList(Task.find(query))
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1);
+  const page = pageFromResults(results, limit);
 
-  res.json({ tasks: await enrichTasksWithStatusInfo(tasks) });
+  res.json({
+    tasks: await enrichTasksWithStatusInfo(page.items),
+    pageInfo: page.pageInfo,
+  });
 };
 
 const listMyTasks = async (req, res) => {
-  const tasks = await populateTask(
-    Task.find({ assignedTo: req.user._id }),
-  ).sort({
-    startDate: 1,
-    createdAt: -1,
-  });
+  const limit = parsePageSize(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const query = combineQuery(
+    { assignedTo: req.user._id },
+    descendingCursorFilter(cursor),
+  );
+  const results = await populateTaskList(Task.find(query))
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1);
+  const page = pageFromResults(results, limit);
 
-  res.json({ tasks: await enrichTasksWithStatusInfo(tasks) });
+  res.json({
+    tasks: await enrichTasksWithStatusInfo(page.items),
+    pageInfo: page.pageInfo,
+  });
 };
 
 const updateTask = async (req, res) => {
@@ -501,6 +568,9 @@ const updateTask = async (req, res) => {
   if (req.body.status !== undefined) {
     const statusKey = await resolveTaskStatusKey(req.body.status);
     await ensureUserCanSetTaskStatus(req.user, statusKey, previousStatus);
+    if (statusKey === "published" && previousStatus !== statusKey) {
+      await ensureTaskHasPublishedAsset(task._id);
+    }
     task.status = statusKey;
   }
 
@@ -611,6 +681,9 @@ const updateTaskStatus = async (req, res) => {
   }
 
   await ensureUserCanSetTaskStatus(req.user, statusKey, task.status);
+  if (statusKey === "published" && task.status !== statusKey) {
+    await ensureTaskHasPublishedAsset(task._id);
+  }
 
   const previousStatus = task.status;
   task.status = statusKey;
@@ -741,15 +814,12 @@ const listCalendarTasks = async (req, res) => {
   const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
   const end = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
   const visibilityQuery = await getTaskQueryForUser(req.user);
-  const canceledStatusKeys = await getTaskStatusKeysByCategory("canceled");
   const filters = {
     startDate: { $gte: start, $lt: end },
   };
 
   if (req.query.status) {
     filters.status = await resolveTaskStatusKey(req.query.status);
-  } else if (canceledStatusKeys.length > 0) {
-    filters.status = { $nin: canceledStatusKeys };
   }
 
   if (req.query.project) {

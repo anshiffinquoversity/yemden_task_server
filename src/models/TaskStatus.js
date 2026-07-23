@@ -23,7 +23,7 @@ const taskStatusSchema = new mongoose.Schema(
     },
     color: {
       type: String,
-      default: '#38BDF8',
+      default: '#61C5F0',
       trim: true,
     },
     position: {

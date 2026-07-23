@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
@@ -20,10 +21,16 @@ const { notFound, errorMiddleware } = require('./middleware/errorMiddleware');
 const app = express();
 app.set('trust proxy', 1);
 const uploadsPath = path.resolve(__dirname, '../uploads');
-const frontendBuildPath = path.resolve(
+const stableFrontendBuildPath = path.resolve(__dirname, '../frontend_web');
+const flutterBuildPath = path.resolve(
   __dirname,
   '../../yemden_task_management/build/web'
 );
+const frontendBuildPath = fs.existsSync(
+  path.join(stableFrontendBuildPath, 'index.html')
+)
+  ? stableFrontendBuildPath
+  : flutterBuildPath;
 const frontendIndexPath = path.join(frontendBuildPath, 'index.html');
 
 fs.mkdirSync(uploadsPath, { recursive: true });
@@ -43,6 +50,7 @@ app.use(
     credentials: true,
   })
 );
+app.use(compression());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));

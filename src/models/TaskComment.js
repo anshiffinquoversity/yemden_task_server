@@ -22,6 +22,19 @@ const commentAttachmentSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    isPublished: {
+      type: Boolean,
+      default: false,
+    },
+    publishedAt: {
+      type: Date,
+      default: null,
+    },
+    publishedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
   },
   { timestamps: false }
 );

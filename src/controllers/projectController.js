@@ -3,6 +3,8 @@ const path = require('path');
 
 const Project = require('../models/Project');
 const Task = require('../models/Task');
+const TaskComment = require('../models/TaskComment');
+const TaskDocument = require('../models/TaskDocument');
 const User = require('../models/User');
 const {
   ApiError,
@@ -15,15 +17,24 @@ const {
 const {
   isAdmin,
   getProjectQueryForUser,
+  getTaskQueryForUser,
   canViewProject,
   canManageProjectWork,
+  combineQuery,
 } = require('../utils/accessControl');
 const { deleteTaskCollaboration } = require('../services/taskCollaborationService');
+const { isPublishableType } = require('../services/taskPublicationService');
+const {
+  parsePageSize,
+  decodeCursor,
+  descendingCursorFilter,
+  pageFromResults,
+} = require('../utils/pagination');
 
 const populateProject = (query) =>
   query.populate('owner', 'name email role status').populate('members', 'name email role status');
 
-const defaultProjectColor = '#3B82F6';
+const defaultProjectColor = '#4A72B7';
 const hexColorPattern = /^#?[0-9A-Fa-f]{6}$/;
 const projectLogoUploadDir = path.resolve(__dirname, '../../uploads/project-logos');
 
@@ -34,7 +45,7 @@ const normalizeProjectColor = (value) => {
 
   const raw = String(value).trim();
   if (!hexColorPattern.test(raw)) {
-    throw new ApiError(400, 'Project color must be a valid hex color like #3B82F6');
+    throw new ApiError(400, 'Project color must be a valid hex color like #4A72B7');
   }
 
   const hex = raw.startsWith('#') ? raw.slice(1) : raw;
@@ -150,8 +161,34 @@ const createProject = async (req, res) => {
 };
 
 const listProjects = async (req, res) => {
+  const visibilityQuery = getProjectQueryForUser(req.user);
+  const filters = {};
+  if (req.query.status) {
+    if (!['active', 'completed', 'archived'].includes(req.query.status)) {
+      throw new ApiError(400, 'Invalid project status filter');
+    }
+    filters.status = req.query.status;
+  }
+
+  const limit = parsePageSize(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const query = combineQuery(
+    combineQuery(visibilityQuery, filters),
+    descendingCursorFilter(cursor)
+  );
+  const results = await populateProject(Project.find(query))
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1);
+  const page = pageFromResults(results, limit);
+
+  res.json({ projects: page.items, pageInfo: page.pageInfo });
+};
+
+const listProjectOptions = async (req, res) => {
   const query = getProjectQueryForUser(req.user);
-  const projects = await populateProject(Project.find(query)).sort({ createdAt: -1 });
+  const projects = await populateProject(
+    Project.find(query).select('title status color logoUrl owner members')
+  ).sort({ title: 1, _id: 1 });
 
   res.json({ projects });
 };
@@ -170,6 +207,88 @@ const getProjectById = async (req, res) => {
   }
 
   res.json({ project });
+};
+
+const listPublishedProjectAssets = async (req, res) => {
+  assertObjectId(req.params.id, 'project id');
+  const project = await populateProject(Project.findById(req.params.id));
+
+  if (!project) {
+    throw new ApiError(404, 'Project not found');
+  }
+  if (!canViewProject(req.user, project)) {
+    throw new ApiError(403, 'You do not have access to this project');
+  }
+
+  const visibilityQuery = await getTaskQueryForUser(req.user);
+  const tasks = await Task.find(
+    combineQuery(visibilityQuery, {
+      project: project._id,
+      status: { $in: ['published', 'delivered'] },
+    }),
+  )
+    .select('_id title')
+    .lean();
+  const taskIds = tasks.map((task) => task._id);
+  const taskTitles = new Map(
+    tasks.map((task) => [String(task._id), String(task.title || '').trim()]),
+  );
+
+  if (taskIds.length === 0) {
+    res.json({ project, assets: [] });
+    return;
+  }
+
+  const [documents, comments] = await Promise.all([
+    TaskDocument.find({
+      task: { $in: taskIds },
+      isPublished: true,
+      type: { $in: ['image', 'video', 'document'] },
+    }).sort({ publishedAt: -1, createdAt: -1, _id: -1 }),
+    TaskComment.find({
+      task: { $in: taskIds },
+      attachments: {
+        $elemMatch: {
+          isPublished: true,
+          type: { $in: ['image', 'video', 'document'] },
+        },
+      },
+    }).sort({ createdAt: -1, _id: -1 }),
+  ]);
+
+  const assets = documents.map((document) => ({
+    id: `document:${document._id}`,
+    title: document.title,
+    taskTitle: taskTitles.get(String(document.task)) || '',
+    url: document.url,
+    type: document.type,
+    mimeType: '',
+    publishedAt: document.publishedAt || document.createdAt,
+  }));
+
+  for (const comment of comments) {
+    for (const attachment of comment.attachments || []) {
+      if (!attachment.isPublished || !isPublishableType(attachment.type)) {
+        continue;
+      }
+      assets.push({
+        id: `comment:${comment._id}:${attachment._id}`,
+        title: attachment.title || attachment.url,
+        taskTitle: taskTitles.get(String(comment.task)) || '',
+        url: attachment.url,
+        type: attachment.type,
+        mimeType: attachment.mimeType || '',
+        publishedAt: attachment.publishedAt || comment.createdAt,
+      });
+    }
+  }
+
+  assets.sort(
+    (left, right) =>
+      new Date(right.publishedAt || 0).getTime() -
+      new Date(left.publishedAt || 0).getTime(),
+  );
+  res.json({ project, assets });
 };
 
 const updateProject = async (req, res) => {
@@ -268,7 +387,9 @@ const deleteProject = async (req, res) => {
 module.exports = {
   createProject,
   listProjects,
+  listProjectOptions,
   getProjectById,
+  listPublishedProjectAssets,
   updateProject,
   deleteProject,
 };

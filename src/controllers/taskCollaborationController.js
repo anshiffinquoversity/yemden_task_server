@@ -9,6 +9,13 @@ const {
   assertObjectId,
 } = require('../utils/http');
 const {
+  parsePageSize,
+  decodeCursor,
+  descendingCursorFilter,
+  pageFromResults,
+} = require('../utils/pagination');
+const {
+  canUpdateTaskStatus,
   getTaskQueryForUser,
   combineQuery,
 } = require('../utils/accessControl');
@@ -19,6 +26,10 @@ const {
   resolveMentionedUsers,
   userLabel,
 } = require('../services/taskCollaborationService');
+const {
+  publicationAssetsForTask,
+  syncPublishedTaskAssets,
+} = require('../services/taskPublicationService');
 
 const validAttachmentTypes = ['image', 'video', 'document', 'audio', 'link'];
 const validDocumentTypes = ['document', 'image', 'video', 'audio', 'link'];
@@ -51,6 +62,19 @@ const findVisibleTask = async (user, taskId) => {
     throw new ApiError(404, 'Task not found');
   }
 
+  return task;
+};
+
+const findTaskForPublication = async (user, taskId) => {
+  assertObjectId(taskId, 'task id');
+  const task = await populateTaskForCollaboration(Task.findById(taskId));
+
+  if (!task) {
+    throw new ApiError(404, 'Task not found');
+  }
+  if (!canUpdateTaskStatus(user, task)) {
+    throw new ApiError(403, 'You cannot publish attachments for this task');
+  }
   return task;
 };
 
@@ -179,19 +203,55 @@ const normalizeUploadedAttachments = (req) => {
 
 const listTaskCollaboration = async (req, res) => {
   const task = await findVisibleTask(req.user, req.params.id);
+  const section = String(req.query.section || 'all').trim().toLowerCase();
+  if (!['all', 'comments', 'documents', 'activities'].includes(section)) {
+    throw new ApiError(400, 'Invalid collaboration section');
+  }
+  const limit = parsePageSize(req.query.limit, {
+    defaultPageSize: 25,
+    maxPageSize: 50,
+  });
+  const queryFor = (cursorValue) => {
+    const cursorFilter = descendingCursorFilter(decodeCursor(cursorValue));
+    return Object.keys(cursorFilter).length
+      ? { $and: [{ task: task._id }, cursorFilter] }
+      : { task: task._id };
+  };
 
-  const [comments, documents, activities, mentionableUsers] = await Promise.all([
-    populateComment(TaskComment.find({ task: task._id })).sort({ createdAt: -1 }),
-    populateDocument(TaskDocument.find({ task: task._id })).sort({ createdAt: -1 }),
-    populateActivity(TaskActivity.find({ task: task._id })).sort({ createdAt: -1 }),
-    mentionableUsersForTask(task),
-  ]);
+  const includes = (name) => section === 'all' || section === name;
+  const [commentResults, documentResults, activityResults, mentionableUsers] =
+    await Promise.all([
+      includes('comments')
+        ? populateComment(TaskComment.find(queryFor(req.query.commentsCursor)))
+            .sort({ createdAt: -1, _id: -1 })
+            .limit(limit + 1)
+        : [],
+      includes('documents')
+        ? populateDocument(TaskDocument.find(queryFor(req.query.documentsCursor)))
+            .sort({ createdAt: -1, _id: -1 })
+            .limit(limit + 1)
+        : [],
+      includes('activities')
+        ? populateActivity(TaskActivity.find(queryFor(req.query.activitiesCursor)))
+            .sort({ createdAt: -1, _id: -1 })
+            .limit(limit + 1)
+        : [],
+      section === 'all' ? mentionableUsersForTask(task) : [],
+    ]);
+  const commentsPage = pageFromResults(commentResults, limit);
+  const documentsPage = pageFromResults(documentResults, limit);
+  const activitiesPage = pageFromResults(activityResults, limit);
 
   res.json({
-    comments,
-    documents,
-    activities,
+    comments: commentsPage.items,
+    documents: documentsPage.items,
+    activities: activitiesPage.items,
     mentionableUsers,
+    pageInfo: {
+      comments: commentsPage.pageInfo,
+      documents: documentsPage.pageInfo,
+      activities: activitiesPage.pageInfo,
+    },
   });
 };
 
@@ -296,8 +356,26 @@ const createTaskDocument = async (req, res) => {
   res.status(201).json({ document: createdDocument });
 };
 
+const listTaskPublicationAssets = async (req, res) => {
+  const task = await findTaskForPublication(req.user, req.params.id);
+  res.json({ assets: await publicationAssetsForTask(task._id) });
+};
+
+const updateTaskPublicationAssets = async (req, res) => {
+  const task = await findTaskForPublication(req.user, req.params.id);
+  const assets = await syncPublishedTaskAssets({
+    taskId: task._id,
+    assetIds: req.body.assetIds,
+    actor: req.user,
+  });
+
+  res.json({ assets });
+};
+
 module.exports = {
   listTaskCollaboration,
   createTaskComment,
   createTaskDocument,
+  listTaskPublicationAssets,
+  updateTaskPublicationAssets,
 };

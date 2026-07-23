@@ -11,6 +11,7 @@ Node.js + Express + MongoDB API for the internal project/task management MVP.
 - Task APIs with status update
 - Monthly calendar task API
 - Dashboard summary API
+- Cursor-paginated list APIs with bounded page sizes
 - Simple role checks for `admin`, `manager`, and `employee`
 
 ## Folder Structure
@@ -166,19 +167,21 @@ POST /api/auth/login
 GET  /api/auth/me
 
 POST   /api/users
-GET    /api/users
+GET    /api/users?limit=25&cursor=OPAQUE_CURSOR
+GET    /api/users/options
 GET    /api/users/:id
 PUT    /api/users/:id
 DELETE /api/users/:id
 
 POST   /api/projects
-GET    /api/projects
+GET    /api/projects?limit=25&cursor=OPAQUE_CURSOR
+GET    /api/projects/options
 GET    /api/projects/:id
 PUT    /api/projects/:id
 DELETE /api/projects/:id
 
 POST   /api/tasks
-GET    /api/tasks
+GET    /api/tasks?limit=25&cursor=OPAQUE_CURSOR
 GET    /api/tasks/:id
 GET    /api/tasks/project/:projectId
 GET    /api/tasks/my-tasks
@@ -187,4 +190,31 @@ GET    /api/tasks/calendar?month=7&year=2026
 
 GET /api/dashboard/summary
 ```
+
+## Pagination
+
+Tasks, project tasks, users, projects, notifications, and task collaboration
+streams use cursor pagination. `limit` defaults to 25 and is capped at 100 for
+main lists. Pass the returned `pageInfo.nextCursor` unchanged to request the
+next page:
+
+```json
+{
+  "tasks": [],
+  "pageInfo": {
+    "limit": 25,
+    "hasNext": true,
+    "nextCursor": "opaque-value"
+  }
+}
+```
+
+The `/users/options` and `/projects/options` routes are lightweight feeds for
+authorized form dropdowns. They are separate from management-table pagination
+so a table page never removes valid assignment choices.
+
+Task collaboration returns independent cursors under `pageInfo.comments`,
+`pageInfo.documents`, and `pageInfo.activities`. Use `section=comments`,
+`section=documents`, or `section=activities` when loading older records to avoid
+re-fetching the other sections.
 # yemden_task_server

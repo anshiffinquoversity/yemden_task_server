@@ -32,7 +32,7 @@ const statusPayload = (body, { creating = false } = {}) => {
   }
 
   if (body.color !== undefined) {
-    payload.color = String(body.color || '').trim() || '#38BDF8';
+    payload.color = String(body.color || '').trim() || '#61C5F0';
   }
 
   if (body.position !== undefined) {
@@ -61,6 +61,15 @@ const createTaskStatus = async (req, res) => {
     throw new ApiError(409, 'A task status with this name already exists');
   }
 
+  if (payload.position === undefined) {
+    const statuses = await listTaskStatuses();
+    const lastPosition = statuses.reduce(
+      (highest, status) => Math.max(highest, Number(status.position) || 0),
+      0
+    );
+    payload.position = lastPosition + 10;
+  }
+
   const status = await TaskStatus.create({
     ...payload,
     createdBy: req.user._id,
@@ -84,6 +93,55 @@ const updateTaskStatus = async (req, res) => {
   await status.save();
 
   res.json({ taskStatus: taskStatusToJson(status) });
+};
+
+const reorderTaskStatuses = async (req, res) => {
+  const statusIds = req.body?.statusIds;
+
+  if (!Array.isArray(statusIds) || statusIds.length === 0) {
+    throw new ApiError(400, 'Status order is required');
+  }
+
+  const normalizedIds = statusIds.map((id) => String(id || '').trim());
+  normalizedIds.forEach((id) => assertObjectId(id, 'task status id'));
+
+  if (new Set(normalizedIds).size !== normalizedIds.length) {
+    throw new ApiError(400, 'Status order cannot contain duplicate statuses');
+  }
+
+  const statuses = await listTaskStatuses();
+  const statusesById = new Map(
+    statuses.map((status) => {
+      const data = taskStatusToJson(status);
+      return [data.id, data];
+    })
+  );
+
+  if (
+    normalizedIds.length !== statuses.length ||
+    normalizedIds.some((id) => !statusesById.has(id))
+  ) {
+    throw new ApiError(
+      400,
+      'Status list changed. Refresh the statuses and try ordering them again'
+    );
+  }
+
+  await TaskStatus.bulkWrite(
+    normalizedIds.map((id, index) => ({
+      updateOne: {
+        filter: { _id: id },
+        update: { $set: { position: (index + 1) * 10 } },
+      },
+    }))
+  );
+
+  res.json({
+    taskStatuses: normalizedIds.map((id, index) => ({
+      ...statusesById.get(id),
+      position: (index + 1) * 10,
+    })),
+  });
 };
 
 const deleteTaskStatus = async (req, res) => {
@@ -113,5 +171,6 @@ module.exports = {
   getTaskStatuses,
   createTaskStatus,
   updateTaskStatus,
+  reorderTaskStatuses,
   deleteTaskStatus,
 };

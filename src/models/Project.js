@@ -15,7 +15,7 @@ const projectSchema = new mongoose.Schema(
     color: {
       type: String,
       trim: true,
-      default: '#3B82F6',
+      default: '#4A72B7',
       match: /^#[0-9A-Fa-f]{6}$/,
     },
     logoUrl: {
@@ -48,6 +48,11 @@ const projectSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+projectSchema.index({ createdAt: -1, _id: -1 });
+projectSchema.index({ owner: 1, createdAt: -1, _id: -1 });
+projectSchema.index({ members: 1, createdAt: -1, _id: -1 });
+projectSchema.index({ status: 1, createdAt: -1, _id: -1 });
 
 projectSchema.set('toJSON', {
   transform(_doc, ret) {

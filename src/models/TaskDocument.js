@@ -33,6 +33,20 @@ const taskDocumentSchema = new mongoose.Schema(
       enum: ['manual', 'comment', 'recording'],
       default: 'manual',
     },
+    isPublished: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    publishedAt: {
+      type: Date,
+      default: null,
+    },
+    publishedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
   },
   { timestamps: true }
 );

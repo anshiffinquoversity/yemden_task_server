@@ -1,6 +1,12 @@
 const Notification = require('../models/Notification');
 const PushToken = require('../models/PushToken');
 const { ApiError, assertObjectId } = require('../utils/http');
+const {
+  parsePageSize,
+  decodeCursor,
+  descendingCursorFilter,
+  pageFromResults,
+} = require('../utils/pagination');
 
 const populateNotification = (query) =>
   query
@@ -9,16 +15,30 @@ const populateNotification = (query) =>
     .populate('project', 'title color');
 
 const listNotifications = async (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const limit = parsePageSize(req.query.limit, {
+    defaultPageSize: 20,
+    maxPageSize: 50,
+  });
+  const cursorFilter = descendingCursorFilter(decodeCursor(req.query.cursor));
+  const query = Object.keys(cursorFilter).length
+    ? { $and: [{ recipient: req.user._id }, cursorFilter] }
+    : { recipient: req.user._id };
 
-  const [notifications, unreadCount] = await Promise.all([
+  const [results, unreadCount] = await Promise.all([
     populateNotification(
-      Notification.find({ recipient: req.user._id }).sort({ createdAt: -1 }).limit(limit)
+      Notification.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(limit + 1)
     ),
     Notification.countDocuments({ recipient: req.user._id, readAt: null }),
   ]);
+  const page = pageFromResults(results, limit);
 
-  res.json({ notifications, unreadCount });
+  res.json({
+    notifications: page.items,
+    unreadCount,
+    pageInfo: page.pageInfo,
+  });
 };
 
 const markNotificationRead = async (req, res) => {

@@ -15,6 +15,8 @@ const {
   createTaskComment,
   createTaskDocument,
   listTaskCollaboration,
+  listTaskPublicationAssets,
+  updateTaskPublicationAssets,
 } = require('../controllers/taskCollaborationController');
 const { protect } = require('../middleware/authMiddleware');
 const { requireRole } = require('../middleware/roleMiddleware');
@@ -30,6 +32,8 @@ router.get('/project/:projectId', listTasksByProject);
 router.post('/', createTask);
 router.get('/', listTasks);
 router.get('/:id/collaboration', listTaskCollaboration);
+router.get('/:id/publication-assets', listTaskPublicationAssets);
+router.put('/:id/publication-assets', updateTaskPublicationAssets);
 router.post('/:id/comments', commentUpload.array('files', 8), createTaskComment);
 router.post('/:id/documents', createTaskDocument);
 router.post('/:id/cancellation-request', requestTaskCancellation);

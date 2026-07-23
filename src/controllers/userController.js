@@ -1,6 +1,20 @@
 const User = require('../models/User');
+const Notification = require('../models/Notification');
+const Project = require('../models/Project');
+const PushToken = require('../models/PushToken');
+const Task = require('../models/Task');
+const TaskActivity = require('../models/TaskActivity');
+const TaskComment = require('../models/TaskComment');
+const TaskDocument = require('../models/TaskDocument');
+const TaskStatus = require('../models/TaskStatus');
 const { sendUserInvitationEmail } = require('../services/emailService');
 const { ApiError, assertObjectId } = require('../utils/http');
+const {
+  parsePageSize,
+  decodeCursor,
+  descendingCursorFilter,
+  pageFromResults,
+} = require('../utils/pagination');
 
 const validRoles = ['admin', 'manager', 'employee'];
 const validStatuses = ['active', 'inactive'];
@@ -75,8 +89,40 @@ const createUser = async (req, res) => {
   res.status(201).json({ user, invitationEmail });
 };
 
-const listUsers = async (_req, res) => {
-  const users = await User.find().sort({ createdAt: -1 });
+const listUsers = async (req, res) => {
+  const filters = {};
+  if (req.query.role) {
+    if (!validRoles.includes(req.query.role)) {
+      throw new ApiError(400, 'Invalid user role filter');
+    }
+    filters.role = req.query.role;
+  }
+  if (req.query.status) {
+    if (!validStatuses.includes(req.query.status)) {
+      throw new ApiError(400, 'Invalid user status filter');
+    }
+    filters.status = req.query.status;
+  }
+
+  const limit = parsePageSize(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const cursorFilter = descendingCursorFilter(cursor);
+  const query = Object.keys(cursorFilter).length
+    ? { $and: [filters, cursorFilter] }
+    : filters;
+  const results = await User.find(query)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1);
+  const page = pageFromResults(results, limit);
+
+  res.json({ users: page.items, pageInfo: page.pageInfo });
+};
+
+const listUserOptions = async (_req, res) => {
+  const users = await User.find()
+    .select('name email role status priorityAccess')
+    .sort({ name: 1, _id: 1 });
+
   res.json({ users });
 };
 
@@ -139,10 +185,53 @@ const deactivateUser = async (req, res) => {
   res.json({ message: 'User deactivated', user });
 };
 
+const permanentlyDeleteUser = async (req, res) => {
+  assertObjectId(req.params.id, 'user id');
+
+  if (req.user._id.toString() === req.params.id) {
+    throw new ApiError(400, 'You cannot permanently delete your own account');
+  }
+
+  const user = await User.findById(req.params.id);
+
+  if (!user) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  const ownedProject = await Project.findOne({ owner: user._id }).select('title');
+  if (ownedProject) {
+    throw new ApiError(
+      409,
+      `Reassign projects owned by ${user.name} before permanently deleting this user`
+    );
+  }
+
+  await Promise.all([
+    Project.updateMany({ members: user._id }, { $pull: { members: user._id } }),
+    Project.updateMany({ createdBy: user._id }, { $set: { createdBy: null } }),
+    Task.updateMany({ assignedTo: user._id }, { $pull: { assignedTo: user._id } }),
+    Task.updateMany({ createdBy: user._id }, { $set: { createdBy: null } }),
+    TaskStatus.updateMany({ createdBy: user._id }, { $set: { createdBy: null } }),
+    TaskComment.updateMany({ mentions: user._id }, { $pull: { mentions: user._id } }),
+    TaskComment.updateMany({ author: user._id }, { $set: { author: null } }),
+    TaskDocument.updateMany({ uploadedBy: user._id }, { $set: { uploadedBy: null } }),
+    TaskActivity.updateMany({ actor: user._id }, { $set: { actor: null } }),
+    Notification.deleteMany({ recipient: user._id }),
+    Notification.updateMany({ actor: user._id }, { $set: { actor: null } }),
+    PushToken.deleteMany({ user: user._id }),
+  ]);
+
+  await User.deleteOne({ _id: user._id });
+
+  res.json({ message: 'User permanently deleted' });
+};
+
 module.exports = {
   createUser,
   listUsers,
+  listUserOptions,
   getUserById,
   updateUser,
   deactivateUser,
+  permanentlyDeleteUser,
 };

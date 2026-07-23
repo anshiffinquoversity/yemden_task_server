@@ -2,7 +2,7 @@ const TaskStatus = require('../models/TaskStatus');
 const { ApiError } = require('./http');
 
 const validStatusCategories = ['open', 'closed', 'canceled'];
-const managerOnlyTaskStatusKeys = ['published'];
+const employeeLockedTaskStatusKeys = ['published', 'delivered'];
 
 const defaultTaskStatuses = [
   {
@@ -17,7 +17,7 @@ const defaultTaskStatuses = [
     name: 'In Progress',
     key: 'in_progress',
     category: 'open',
-    color: '#38BDF8',
+    color: '#61C5F0',
     position: 20,
     isDefault: true,
   },
@@ -58,8 +58,14 @@ const normalizeStatusKey = (value) =>
     .replace(/^_+|_+$/g, '')
     .slice(0, 60);
 
-const isManagerOnlyTaskStatusKey = (value) =>
-  managerOnlyTaskStatusKeys.includes(normalizeStatusKey(value));
+const canEmployeeChangeTaskStatus = (previousStatus, nextStatus) => {
+  const previousKey = normalizeStatusKey(previousStatus);
+  const nextKey = normalizeStatusKey(nextStatus);
+  return (
+    previousKey === nextKey ||
+    !employeeLockedTaskStatusKeys.includes(previousKey)
+  );
+};
 
 const readableStatusKey = (value) =>
   String(value || '')
@@ -73,15 +79,19 @@ const ensureDefaultTaskStatuses = async () => {
     return;
   }
 
-  defaultsPromise = Promise.all(
-    defaultTaskStatuses.map((status) =>
+  defaultsPromise = Promise.all([
+    ...defaultTaskStatuses.map((status) =>
       TaskStatus.updateOne(
         { key: status.key },
         { $setOnInsert: status },
         { upsert: true }
       )
-    )
-  )
+    ),
+    TaskStatus.updateOne(
+      { key: 'in_progress', isDefault: true, color: '#38BDF8' },
+      { $set: { color: '#61C5F0' } }
+    ),
+  ])
     .then(() => {
       defaultsReady = true;
     })
@@ -119,7 +129,7 @@ const fallbackStatusInfo = (key) => {
     name: readableStatusKey(key),
     key,
     category: 'open',
-    color: '#38BDF8',
+    color: '#61C5F0',
     position: 0,
     isDefault: false,
   };
@@ -186,9 +196,9 @@ const enrichTasksWithStatusInfo = async (tasks) => {
 module.exports = {
   validStatusCategories,
   defaultTaskStatuses,
-  managerOnlyTaskStatusKeys,
+  employeeLockedTaskStatusKeys,
   normalizeStatusKey,
-  isManagerOnlyTaskStatusKey,
+  canEmployeeChangeTaskStatus,
   ensureDefaultTaskStatuses,
   listTaskStatuses,
   taskStatusToJson,

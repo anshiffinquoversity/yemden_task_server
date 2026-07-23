@@ -50,6 +50,11 @@ const taskSchema = new mongoose.Schema(
 taskSchema.index({ status: 1, startDate: 1 });
 taskSchema.index({ status: 1, dueDate: 1 });
 taskSchema.index({ assignedTo: 1 });
+taskSchema.index({ createdAt: -1, _id: -1 });
+taskSchema.index({ project: 1, createdAt: -1, _id: -1 });
+taskSchema.index({ assignedTo: 1, createdAt: -1, _id: -1 });
+taskSchema.index({ status: 1, createdAt: -1, _id: -1 });
+taskSchema.index({ startDate: 1 });
 taskSchema.index({ reminderAt: 1, reminderLeadSentAt: 1 });
 taskSchema.index({ reminderAt: 1, reminderSentAt: 1 });
 

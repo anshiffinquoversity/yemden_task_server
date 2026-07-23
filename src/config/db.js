@@ -5,7 +5,12 @@ mongoose.set('strictQuery', true);
 
 const connectDatabase = async () => {
   try {
-    await mongoose.connect(env.MONGO_URI);
+    await mongoose.connect(env.MONGO_URI, {
+      maxPoolSize: 10,
+      minPoolSize: 0,
+      maxIdleTimeMS: 60_000,
+      serverSelectionTimeoutMS: 10_000,
+    });
     console.log('MongoDB connected');
   } catch (error) {
     console.error('MongoDB connection error:', error.message);
@@ -14,4 +19,3 @@ const connectDatabase = async () => {
 };
 
 module.exports = { connectDatabase };
-
