@@ -2,7 +2,8 @@ const TaskStatus = require('../models/TaskStatus');
 const { ApiError } = require('./http');
 
 const validStatusCategories = ['open', 'closed', 'canceled'];
-const employeeLockedTaskStatusKeys = ['published', 'delivered'];
+const approvedTaskStatusKey = 'approved';
+const finalTaskStatusKeys = ['published', 'delivered'];
 
 const defaultTaskStatuses = [
   {
@@ -61,10 +62,34 @@ const normalizeStatusKey = (value) =>
 const canEmployeeChangeTaskStatus = (previousStatus, nextStatus) => {
   const previousKey = normalizeStatusKey(previousStatus);
   const nextKey = normalizeStatusKey(nextStatus);
+
   return (
     previousKey === nextKey ||
-    !employeeLockedTaskStatusKeys.includes(previousKey)
+    (previousKey === approvedTaskStatusKey &&
+      finalTaskStatusKeys.includes(nextKey))
   );
+};
+
+const canManagerChangeTaskStatus = (previousStatus, nextStatus) => {
+  const previousKey = normalizeStatusKey(previousStatus);
+  const nextKey = normalizeStatusKey(nextStatus);
+
+  if (previousKey === nextKey) return true;
+  if (finalTaskStatusKeys.includes(previousKey)) return false;
+  if (previousKey === approvedTaskStatusKey) return true;
+  return nextKey === approvedTaskStatusKey;
+};
+
+const canUserChangeTaskStatus = (role, previousStatus, nextStatus) => {
+  if (previousStatus === undefined || previousStatus === null) return true;
+  if (role === 'admin') return true;
+  if (role === 'manager') {
+    return canManagerChangeTaskStatus(previousStatus, nextStatus);
+  }
+  if (role === 'employee') {
+    return canEmployeeChangeTaskStatus(previousStatus, nextStatus);
+  }
+  return false;
 };
 
 const readableStatusKey = (value) =>
@@ -196,9 +221,12 @@ const enrichTasksWithStatusInfo = async (tasks) => {
 module.exports = {
   validStatusCategories,
   defaultTaskStatuses,
-  employeeLockedTaskStatusKeys,
+  approvedTaskStatusKey,
+  finalTaskStatusKeys,
   normalizeStatusKey,
   canEmployeeChangeTaskStatus,
+  canManagerChangeTaskStatus,
+  canUserChangeTaskStatus,
   ensureDefaultTaskStatuses,
   listTaskStatuses,
   taskStatusToJson,

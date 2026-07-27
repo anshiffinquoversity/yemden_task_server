@@ -30,7 +30,7 @@ const {
   validStatusCategories,
   resolveTaskStatusKey,
   getTaskStatusKeysByCategory,
-  canEmployeeChangeTaskStatus,
+  canUserChangeTaskStatus,
   enrichTaskWithStatusInfo,
   enrichTasksWithStatusInfo,
 } = require("../utils/taskStatusCatalog");
@@ -94,23 +94,37 @@ const populateTaskList = (query) =>
 const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   if (previousStatus === statusKey) return;
 
-  if (
-    isEmployee(user) &&
-    !canEmployeeChangeTaskStatus(previousStatus, statusKey)
-  ) {
+  const canceledStatusKeys = await getTaskStatusKeysByCategory("canceled");
+  const changesCanceledStatus =
+    canceledStatusKeys.includes(statusKey) ||
+    (previousStatus !== undefined &&
+      previousStatus !== null &&
+      canceledStatusKeys.includes(previousStatus));
+
+  if (changesCanceledStatus && !isAdmin(user)) {
     throw new ApiError(
       403,
-      "Employees cannot change the status of a published or delivered task",
+      "Only admins can change tasks to or from a canceled status. Managers and employees can request cancellation from an admin.",
     );
   }
 
-  const canceledStatusKeys = await getTaskStatusKeysByCategory("canceled");
-  if (canceledStatusKeys.includes(statusKey) && !isAdmin(user)) {
+  if (canUserChangeTaskStatus(user?.role, previousStatus, statusKey)) return;
+
+  if (isEmployee(user)) {
     throw new ApiError(
       403,
-      "Only admins can cancel tasks. Managers and employees can request cancellation from an admin.",
+      "Employees can only change Approved tasks to Published or Delivered",
     );
   }
+
+  if (isManager(user)) {
+    throw new ApiError(
+      403,
+      "Managers must move tasks to Approved before selecting another status, and cannot change Published or Delivered tasks",
+    );
+  }
+
+  throw new ApiError(403, "You cannot make this task status change");
 };
 
 const ensureProjectCanManageTasks = async (user, projectId) => {
