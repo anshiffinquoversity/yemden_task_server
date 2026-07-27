@@ -29,6 +29,7 @@ const {
 const {
   validStatusCategories,
   resolveTaskStatusKey,
+  resolveTaskStatusPolicyKey,
   getTaskStatusKeysByCategory,
   canUserChangeTaskStatus,
   enrichTaskWithStatusInfo,
@@ -94,12 +95,15 @@ const populateTaskList = (query) =>
 const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   if (previousStatus === statusKey) return;
 
-  const canceledStatusKeys = await getTaskStatusKeysByCategory("canceled");
+  const [statusPolicyKey, previousStatusPolicyKey] = await Promise.all([
+    resolveTaskStatusPolicyKey(statusKey),
+    previousStatus === undefined || previousStatus === null
+      ? Promise.resolve(previousStatus)
+      : resolveTaskStatusPolicyKey(previousStatus),
+  ]);
   const changesCanceledStatus =
-    canceledStatusKeys.includes(statusKey) ||
-    (previousStatus !== undefined &&
-      previousStatus !== null &&
-      canceledStatusKeys.includes(previousStatus));
+    statusPolicyKey === "canceled" ||
+    previousStatusPolicyKey === "canceled";
 
   if (changesCanceledStatus && !isAdmin(user)) {
     throw new ApiError(
@@ -108,12 +112,22 @@ const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
     );
   }
 
-  if (canUserChangeTaskStatus(user?.role, previousStatus, statusKey)) return;
+  if (
+    canUserChangeTaskStatus(
+      user,
+      previousStatusPolicyKey,
+      statusPolicyKey,
+    )
+  ) {
+    return statusPolicyKey;
+  }
 
   if (isEmployee(user)) {
     throw new ApiError(
       403,
-      "Employees can only change Approved tasks to Published or Delivered",
+      isHighAccessEmployee(user)
+        ? "Employees cannot select Approved, Canceled, or Delivered statuses"
+        : "Employees cannot select Approved, Canceled, Delivered, or Published statuses. Published requires high access",
     );
   }
 
@@ -402,8 +416,11 @@ const createTask = async (req, res) => {
     req.user,
   );
   const statusKey = await resolveTaskStatusKey(status || "open");
-  await ensureUserCanSetTaskStatus(req.user, statusKey);
-  if (statusKey === "published") {
+  const statusPolicyKey = await ensureUserCanSetTaskStatus(
+    req.user,
+    statusKey,
+  );
+  if (statusPolicyKey === "published") {
     throw new ApiError(
       400,
       "Create the task first, add attachments, and publish at least one attachment before publishing the task",
@@ -581,8 +598,12 @@ const updateTask = async (req, res) => {
 
   if (req.body.status !== undefined) {
     const statusKey = await resolveTaskStatusKey(req.body.status);
-    await ensureUserCanSetTaskStatus(req.user, statusKey, previousStatus);
-    if (statusKey === "published" && previousStatus !== statusKey) {
+    const statusPolicyKey = await ensureUserCanSetTaskStatus(
+      req.user,
+      statusKey,
+      previousStatus,
+    );
+    if (statusPolicyKey === "published" && previousStatus !== statusKey) {
       await ensureTaskHasPublishedAsset(task._id);
     }
     task.status = statusKey;
@@ -694,8 +715,12 @@ const updateTaskStatus = async (req, res) => {
     throw new ApiError(403, "You cannot update this task status");
   }
 
-  await ensureUserCanSetTaskStatus(req.user, statusKey, task.status);
-  if (statusKey === "published" && task.status !== statusKey) {
+  const statusPolicyKey = await ensureUserCanSetTaskStatus(
+    req.user,
+    statusKey,
+    task.status,
+  );
+  if (statusPolicyKey === "published" && task.status !== statusKey) {
     await ensureTaskHasPublishedAsset(task._id);
   }
 

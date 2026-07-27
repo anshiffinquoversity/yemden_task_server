@@ -4,6 +4,13 @@ const { ApiError } = require('./http');
 const validStatusCategories = ['open', 'closed', 'canceled'];
 const approvedTaskStatusKey = 'approved';
 const finalTaskStatusKeys = ['published', 'delivered'];
+const employeeRestrictedTaskStatusKeys = new Set([
+  approvedTaskStatusKey,
+  'canceled',
+  'cancelled',
+  'delivered',
+  'published',
+]);
 
 const defaultTaskStatuses = [
   {
@@ -59,15 +66,55 @@ const normalizeStatusKey = (value) =>
     .replace(/^_+|_+$/g, '')
     .slice(0, 60);
 
-const canEmployeeChangeTaskStatus = (previousStatus, nextStatus) => {
+const taskStatusPolicyKey = (status) => {
+  const data =
+    status && typeof status === 'object'
+      ? status
+      : { key: status, name: '', category: '' };
+  const key = normalizeStatusKey(data.key);
+  const name = normalizeStatusKey(data.name);
+  const category = normalizeStatusKey(data.category);
+
+  if (category === 'canceled' || category === 'cancelled') {
+    return 'canceled';
+  }
+
+  const displayIdentity = name || key;
+  if (displayIdentity === 'canceled' || displayIdentity === 'cancelled') {
+    return 'canceled';
+  }
+
+  for (const reservedKey of [
+    approvedTaskStatusKey,
+    'published',
+    'delivered',
+  ]) {
+    if (displayIdentity === reservedKey) return reservedKey;
+  }
+
+  return displayIdentity;
+};
+
+const canEmployeeChangeTaskStatus = (
+  previousStatus,
+  nextStatus,
+  priorityAccess = 'medium',
+) => {
   const previousKey = normalizeStatusKey(previousStatus);
   const nextKey = normalizeStatusKey(nextStatus);
 
-  return (
-    previousKey === nextKey ||
-    (previousKey === approvedTaskStatusKey &&
-      finalTaskStatusKeys.includes(nextKey))
-  );
+  if (previousKey === nextKey) return true;
+  if (
+    finalTaskStatusKeys.includes(previousKey) ||
+    previousKey === 'canceled' ||
+    previousKey === 'cancelled'
+  ) {
+    return false;
+  }
+  if (nextKey === 'published') {
+    return normalizeStatusKey(priorityAccess) === 'high';
+  }
+  return !employeeRestrictedTaskStatusKeys.has(nextKey);
 };
 
 const canManagerChangeTaskStatus = (previousStatus, nextStatus) => {
@@ -80,14 +127,23 @@ const canManagerChangeTaskStatus = (previousStatus, nextStatus) => {
   return nextKey === approvedTaskStatusKey;
 };
 
-const canUserChangeTaskStatus = (role, previousStatus, nextStatus) => {
-  if (previousStatus === undefined || previousStatus === null) return true;
+const canUserChangeTaskStatus = (userOrRole, previousStatus, nextStatus) => {
+  const role =
+    typeof userOrRole === 'string' ? userOrRole : userOrRole?.role;
+  const priorityAccess =
+    typeof userOrRole === 'object' ? userOrRole?.priorityAccess : undefined;
+
   if (role === 'admin') return true;
+  if (role === 'employee') {
+    return canEmployeeChangeTaskStatus(
+      previousStatus,
+      nextStatus,
+      priorityAccess,
+    );
+  }
+  if (previousStatus === undefined || previousStatus === null) return true;
   if (role === 'manager') {
     return canManagerChangeTaskStatus(previousStatus, nextStatus);
-  }
-  if (role === 'employee') {
-    return canEmployeeChangeTaskStatus(previousStatus, nextStatus);
   }
   return false;
 };
@@ -186,6 +242,23 @@ const resolveTaskStatusKey = async (value) => {
   return status.key;
 };
 
+const resolveTaskStatusPolicyKey = async (value) => {
+  const key = normalizeStatusKey(value);
+
+  if (!key) {
+    throw new ApiError(400, 'Task status is required');
+  }
+
+  await ensureDefaultTaskStatuses();
+  const status = await TaskStatus.findOne({ key });
+
+  if (!status) {
+    throw new ApiError(400, `Task status "${value}" does not exist`);
+  }
+
+  return taskStatusPolicyKey(status);
+};
+
 const getTaskStatusKeysByCategory = async (category) => {
   if (!validStatusCategories.includes(category)) {
     throw new ApiError(400, `Status category must be one of: ${validStatusCategories.join(', ')}`);
@@ -224,6 +297,7 @@ module.exports = {
   approvedTaskStatusKey,
   finalTaskStatusKeys,
   normalizeStatusKey,
+  taskStatusPolicyKey,
   canEmployeeChangeTaskStatus,
   canManagerChangeTaskStatus,
   canUserChangeTaskStatus,
@@ -231,6 +305,7 @@ module.exports = {
   listTaskStatuses,
   taskStatusToJson,
   resolveTaskStatusKey,
+  resolveTaskStatusPolicyKey,
   getTaskStatusKeysByCategory,
   enrichTaskWithStatusInfo,
   enrichTasksWithStatusInfo,
