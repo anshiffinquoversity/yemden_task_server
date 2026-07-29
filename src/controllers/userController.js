@@ -16,7 +16,7 @@ const {
   pageFromResults,
 } = require('../utils/pagination');
 
-const validRoles = ['admin', 'manager', 'employee'];
+const validRoles = ['admin', 'manager', 'employee', 'social_media_handler'];
 const validStatuses = ['active', 'inactive'];
 const validPriorityAccess = ['low', 'medium', 'high'];
 

@@ -1,3 +1,4 @@
+const fs = require('fs/promises');
 const path = require('path');
 
 const Task = require('../models/Task');
@@ -7,6 +8,7 @@ const TaskDocument = require('../models/TaskDocument');
 const {
   ApiError,
   assertObjectId,
+  sameId,
 } = require('../utils/http');
 const {
   parsePageSize,
@@ -16,6 +18,7 @@ const {
 } = require('../utils/pagination');
 const {
   canUpdateTaskStatus,
+  isAdmin,
   getTaskQueryForUser,
   combineQuery,
 } = require('../utils/accessControl');
@@ -33,6 +36,7 @@ const {
 
 const validAttachmentTypes = ['image', 'video', 'document', 'audio', 'link'];
 const validDocumentTypes = ['document', 'image', 'video', 'audio', 'link'];
+const commentUploadDir = path.resolve(__dirname, '../../uploads/task-comments');
 
 const populateTaskForCollaboration = (query) =>
   query
@@ -151,6 +155,36 @@ const publicUrlForUpload = (req, file) => {
   return `${req.protocol}://${req.get('host')}${relativePath}`;
 };
 
+const deleteUploadedCommentFile = async (attachmentUrl) => {
+  const rawUrl = String(attachmentUrl || '').trim();
+  if (!rawUrl) return;
+
+  let pathname = rawUrl;
+  try {
+    pathname = new URL(rawUrl).pathname;
+  } catch (_error) {
+    // Relative upload URLs are supported for older comment records.
+  }
+
+  if (!pathname.startsWith('/uploads/task-comments/')) return;
+  const filename = path.basename(pathname);
+  if (!filename || filename === '.' || filename === '..') return;
+
+  const targetPath = path.resolve(commentUploadDir, filename);
+  if (!targetPath.startsWith(`${commentUploadDir}${path.sep}`)) return;
+
+  try {
+    await fs.unlink(targetPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(
+        `Unable to delete comment attachment ${targetPath}:`,
+        error.message
+      );
+    }
+  }
+};
+
 const videoExtensions = new Set(['.mp4', '.mov', '.webm', '.mkv']);
 
 const inferUploadedAttachmentType = (file) => {
@@ -197,6 +231,7 @@ const normalizeUploadedAttachments = (req) => {
       title,
       url: publicUrlForUpload(req, file),
       mimeType: file.mimetype || '',
+      isLocalUpload: true,
     };
   });
 };
@@ -312,6 +347,31 @@ const createTaskComment = async (req, res) => {
   });
 };
 
+const deleteTaskComment = async (req, res) => {
+  const task = await findVisibleTask(req.user, req.params.id);
+  assertObjectId(req.params.commentId, 'comment id');
+
+  const comment = await TaskComment.findOne({
+    _id: req.params.commentId,
+    task: task._id,
+  });
+  if (!comment) {
+    throw new ApiError(404, 'Comment not found');
+  }
+
+  if (!isAdmin(req.user) && !sameId(comment.author, req.user._id)) {
+    throw new ApiError(403, 'You can only delete your own comments');
+  }
+
+  const uploadedAttachmentUrls = (comment.attachments || [])
+    .filter((attachment) => attachment.isLocalUpload)
+    .map((attachment) => attachment.url);
+  await comment.deleteOne();
+  await Promise.all(uploadedAttachmentUrls.map(deleteUploadedCommentFile));
+
+  res.json({ message: 'Comment deleted' });
+};
+
 const createTaskDocument = async (req, res) => {
   const task = await findVisibleTask(req.user, req.params.id);
   const title = String(req.body.title || '').trim();
@@ -375,6 +435,7 @@ const updateTaskPublicationAssets = async (req, res) => {
 module.exports = {
   listTaskCollaboration,
   createTaskComment,
+  deleteTaskComment,
   createTaskDocument,
   listTaskPublicationAssets,
   updateTaskPublicationAssets,

@@ -7,9 +7,11 @@ const { ApiError } = require('../utils/http');
 
 const commentUploadPath = path.resolve(__dirname, '../../uploads/task-comments');
 const projectLogoUploadPath = path.resolve(__dirname, '../../uploads/project-logos');
+const taskThumbnailUploadPath = path.resolve(__dirname, '../../uploads/task-thumbnails');
 
 fs.mkdirSync(commentUploadPath, { recursive: true });
 fs.mkdirSync(projectLogoUploadPath, { recursive: true });
+fs.mkdirSync(taskThumbnailUploadPath, { recursive: true });
 
 const safeExtension = (filename) => {
   const extension = path.extname(filename || '').toLowerCase();
@@ -79,6 +81,27 @@ const isAllowedImageUpload = (file) => {
   return mimetype.startsWith('image/');
 };
 
+const allowedTaskThumbnailMimeTypes = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+const allowedTaskThumbnailExtensions = new Set([
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.webp',
+]);
+
+const isAllowedTaskThumbnailUpload = (file) => {
+  const mimetype = String(file.mimetype || '').toLowerCase();
+  const extension = path.extname(file.originalname || '').toLowerCase();
+  return (
+    allowedTaskThumbnailMimeTypes.has(mimetype) &&
+    allowedTaskThumbnailExtensions.has(extension)
+  );
+};
+
 const commentUpload = multer({
   storage: storageFor(commentUploadPath),
   limits: {
@@ -111,7 +134,24 @@ const projectLogoUpload = multer({
   },
 });
 
+const taskThumbnailUpload = multer({
+  storage: storageFor(taskThumbnailUploadPath),
+  limits: {
+    files: 1,
+    fileSize: 5 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, callback) => {
+    if (!isAllowedTaskThumbnailUpload(file)) {
+      callback(new ApiError(400, 'Task thumbnail must be a PNG, JPG, or WebP image'));
+      return;
+    }
+
+    callback(null, true);
+  },
+});
+
 module.exports = {
   commentUpload,
   projectLogoUpload,
+  taskThumbnailUpload,
 };

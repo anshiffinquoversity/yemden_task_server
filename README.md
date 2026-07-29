@@ -12,7 +12,8 @@ Node.js + Express + MongoDB API for the internal project/task management MVP.
 - Monthly calendar task API
 - Dashboard summary API
 - Cursor-paginated list APIs with bounded page sizes
-- Simple role checks for `admin`, `manager`, and `employee`
+- Simple role checks for `admin`, `manager`, `employee`, and
+  `social_media_handler` (employee access plus publishing)
 
 ## Folder Structure
 

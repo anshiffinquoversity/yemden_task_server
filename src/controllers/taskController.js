@@ -17,6 +17,7 @@ const {
 const {
   isAdmin,
   isManager,
+  isSocialMediaHandler,
   isEmployee,
   isHighAccessEmployee,
   getTaskQueryForUser,
@@ -44,6 +45,10 @@ const {
 } = require("../services/taskCollaborationService");
 const { createUserNotifications } = require("../services/notificationService");
 const { ensureTaskHasPublishedAsset } = require("../services/taskPublicationService");
+const {
+  deleteTaskThumbnailFile,
+  taskThumbnailUrlForFile,
+} = require("../utils/taskThumbnail");
 
 const validPriorities = ["low", "medium", "high"];
 const excludedOverdueStatusKeys = new Set([
@@ -77,6 +82,12 @@ const isTruthyQueryValue = (value) => {
     .toLowerCase();
   return normalized === "true" || normalized === "1" || normalized === "yes";
 };
+
+const isTruthyBodyValue = (value) =>
+  value === true ||
+  value === 1 ||
+  String(value || "").trim().toLowerCase() === "true" ||
+  String(value || "").trim() === "1";
 
 const populateTask = (query) =>
   query
@@ -123,6 +134,12 @@ const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   }
 
   if (isEmployee(user)) {
+    if (isSocialMediaHandler(user)) {
+      throw new ApiError(
+        403,
+        "Social media handlers cannot select Approved or Canceled statuses",
+      );
+    }
     throw new ApiError(
       403,
       isHighAccessEmployee(user)
@@ -168,7 +185,20 @@ const projectMemberIdSet = (project) => {
 
 const normalizeAssignedUserIds = (value) => {
   if (value === undefined || value === null || value === "") return [];
-  const values = Array.isArray(value) ? value : [value];
+  let normalizedValue = value;
+  if (typeof value === "string" && value.trim().startsWith("[")) {
+    try {
+      normalizedValue = JSON.parse(value);
+    } catch (_error) {
+      throw new ApiError(400, "Invalid assigned users payload");
+    }
+    if (!Array.isArray(normalizedValue)) {
+      throw new ApiError(400, "Invalid assigned users payload");
+    }
+  }
+  const values = Array.isArray(normalizedValue)
+    ? normalizedValue
+    : [normalizedValue];
   return [
     ...new Set(
       values.filter(Boolean).map((item) => (item._id || item).toString()),
@@ -430,6 +460,7 @@ const createTask = async (req, res) => {
   const task = await Task.create({
     title: String(title).trim(),
     description: description ? String(description).trim() : "",
+    thumbnailUrl: taskThumbnailUrlForFile(req.file),
     project,
     assignedTo,
     status: statusKey,
@@ -563,6 +594,8 @@ const updateTask = async (req, res) => {
   const previousAssignedTo = assignedUserIdList(task.assignedTo);
   const previousStatus = task.status;
   const previousReminderAt = task.reminderAt;
+  const previousThumbnailUrl = task.thumbnailUrl;
+  let shouldDeletePreviousThumbnail = false;
   let taskProject = task.project;
 
   if (
@@ -586,6 +619,17 @@ const updateTask = async (req, res) => {
 
   if (req.body.description !== undefined) {
     task.description = String(req.body.description || "").trim();
+  }
+
+  if (req.file) {
+    task.thumbnailUrl = taskThumbnailUrlForFile(req.file);
+    shouldDeletePreviousThumbnail = Boolean(previousThumbnailUrl);
+  } else if (
+    req.body.removeThumbnail !== undefined &&
+    isTruthyBodyValue(req.body.removeThumbnail)
+  ) {
+    task.thumbnailUrl = "";
+    shouldDeletePreviousThumbnail = Boolean(previousThumbnailUrl);
   }
 
   if (req.body.assignedTo !== undefined) {
@@ -634,6 +678,9 @@ const updateTask = async (req, res) => {
   }
 
   await task.save();
+  if (shouldDeletePreviousThumbnail) {
+    await deleteTaskThumbnailFile(previousThumbnailUrl);
+  }
 
   const activityJobs = [];
   const notificationJobs = [];
@@ -764,7 +811,7 @@ const requestTaskCancellation = async (req, res) => {
   if (!isManager(req.user) && !isEmployee(req.user)) {
     throw new ApiError(
       403,
-      "Only managers and employees can request task cancellation",
+      "Only managers, employees, and social media handlers can request task cancellation",
     );
   }
 
@@ -834,7 +881,11 @@ const deleteTask = async (req, res) => {
     throw new ApiError(403, "You cannot delete this task");
   }
 
-  await Promise.all([deleteTaskCollaboration(task._id), task.deleteOne()]);
+  await Promise.all([
+    deleteTaskCollaboration(task._id),
+    deleteTaskThumbnailFile(task.thumbnailUrl),
+    task.deleteOne(),
+  ]);
   res.json({ message: "Task deleted" });
 };
 

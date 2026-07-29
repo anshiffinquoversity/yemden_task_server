@@ -4,7 +4,10 @@ const { sameId } = require("./http");
 
 const isAdmin = (user) => user?.role === "admin";
 const isManager = (user) => user?.role === "manager";
-const isEmployee = (user) => user?.role === "employee";
+const isSocialMediaHandler = (user) =>
+  user?.role === "social_media_handler";
+const isEmployee = (user) =>
+  user?.role === "employee" || isSocialMediaHandler(user);
 const accessRank = { low: 0, medium: 1, high: 2 };
 
 const normalizeIdList = (value) => {
@@ -144,6 +147,7 @@ const countVisibleEmployeeProjects = async (user) => {
 module.exports = {
   isAdmin,
   isManager,
+  isSocialMediaHandler,
   isEmployee,
   hasPriorityAccess,
   isHighAccessEmployee,

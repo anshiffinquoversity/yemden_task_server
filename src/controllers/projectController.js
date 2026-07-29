@@ -23,13 +23,18 @@ const {
   combineQuery,
 } = require('../utils/accessControl');
 const { deleteTaskCollaboration } = require('../services/taskCollaborationService');
-const { isPublishableType } = require('../services/taskPublicationService');
+const {
+  publishableTypes,
+  isPublishableType,
+  commentLinkAssetId,
+} = require('../services/taskPublicationService');
 const {
   parsePageSize,
   decodeCursor,
   descendingCursorFilter,
   pageFromResults,
 } = require('../utils/pagination');
+const { deleteTaskThumbnailFile } = require('../utils/taskThumbnail');
 
 const populateProject = (query) =>
   query.populate('owner', 'name email role status').populate('members', 'name email role status');
@@ -243,16 +248,21 @@ const listPublishedProjectAssets = async (req, res) => {
     TaskDocument.find({
       task: { $in: taskIds },
       isPublished: true,
-      type: { $in: ['image', 'video', 'document'] },
+      type: { $in: [...publishableTypes] },
     }).sort({ publishedAt: -1, createdAt: -1, _id: -1 }),
     TaskComment.find({
       task: { $in: taskIds },
-      attachments: {
-        $elemMatch: {
-          isPublished: true,
-          type: { $in: ['image', 'video', 'document'] },
+      $or: [
+        {
+          attachments: {
+            $elemMatch: {
+              isPublished: true,
+              type: { $in: [...publishableTypes] },
+            },
+          },
         },
-      },
+        { publicationLinks: { $elemMatch: { isPublished: true } } },
+      ],
     }).sort({ createdAt: -1, _id: -1 }),
   ]);
 
@@ -279,6 +289,18 @@ const listPublishedProjectAssets = async (req, res) => {
         type: attachment.type,
         mimeType: attachment.mimeType || '',
         publishedAt: attachment.publishedAt || comment.createdAt,
+      });
+    }
+    for (const link of comment.publicationLinks || []) {
+      if (!link.isPublished) continue;
+      assets.push({
+        id: commentLinkAssetId(comment, link),
+        title: link.title || link.url,
+        taskTitle: taskTitles.get(String(comment.task)) || '',
+        url: link.url,
+        type: 'link',
+        mimeType: '',
+        publishedAt: link.publishedAt || comment.createdAt,
       });
     }
   }
@@ -375,8 +397,14 @@ const deleteProject = async (req, res) => {
     throw new ApiError(404, 'Project not found');
   }
 
-  const taskIds = await Task.find({ project: project._id }).distinct('_id');
+  const projectTasks = await Task.find({ project: project._id })
+    .select('_id thumbnailUrl')
+    .lean();
+  const taskIds = projectTasks.map((task) => task._id);
   await deleteTaskCollaboration(taskIds);
+  await Promise.all(
+    projectTasks.map((task) => deleteTaskThumbnailFile(task.thumbnailUrl)),
+  );
   await Task.deleteMany({ project: project._id });
   await deleteProjectLogoFile(project.logoUrl);
   await project.deleteOne();

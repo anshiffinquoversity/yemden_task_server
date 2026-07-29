@@ -99,6 +99,7 @@ const canEmployeeChangeTaskStatus = (
   previousStatus,
   nextStatus,
   priorityAccess = 'medium',
+  canDeliver = false,
 ) => {
   const previousKey = normalizeStatusKey(previousStatus);
   const nextKey = normalizeStatusKey(nextStatus);
@@ -114,6 +115,7 @@ const canEmployeeChangeTaskStatus = (
   if (nextKey === 'published') {
     return normalizeStatusKey(priorityAccess) === 'high';
   }
+  if (nextKey === 'delivered') return canDeliver;
   return !employeeRestrictedTaskStatusKeys.has(nextKey);
 };
 
@@ -139,6 +141,14 @@ const canUserChangeTaskStatus = (userOrRole, previousStatus, nextStatus) => {
       previousStatus,
       nextStatus,
       priorityAccess,
+    );
+  }
+  if (role === 'social_media_handler') {
+    return canEmployeeChangeTaskStatus(
+      previousStatus,
+      nextStatus,
+      'high',
+      true,
     );
   }
   if (previousStatus === undefined || previousStatus === null) return true;

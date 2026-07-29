@@ -22,6 +22,10 @@ const commentAttachmentSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    isLocalUpload: {
+      type: Boolean,
+      default: false,
+    },
     isPublished: {
       type: Boolean,
       default: false,
@@ -37,6 +41,35 @@ const commentAttachmentSchema = new mongoose.Schema(
     },
   },
   { timestamps: false }
+);
+
+const commentPublicationLinkSchema = new mongoose.Schema(
+  {
+    url: {
+      type: String,
+      trim: true,
+      required: true,
+    },
+    title: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    isPublished: {
+      type: Boolean,
+      default: false,
+    },
+    publishedAt: {
+      type: Date,
+      default: null,
+    },
+    publishedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  { _id: false, timestamps: false }
 );
 
 const taskCommentSchema = new mongoose.Schema(
@@ -64,6 +97,7 @@ const taskCommentSchema = new mongoose.Schema(
       },
     ],
     attachments: [commentAttachmentSchema],
+    publicationLinks: [commentPublicationLinkSchema],
   },
   { timestamps: true }
 );

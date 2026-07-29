@@ -12,6 +12,11 @@ const taskSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    thumbnailUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     project: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Project",

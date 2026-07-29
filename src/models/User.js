@@ -23,7 +23,7 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['admin', 'manager', 'employee'],
+      enum: ['admin', 'manager', 'employee', 'social_media_handler'],
       default: 'employee',
     },
     priorityAccess: {

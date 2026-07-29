@@ -9,6 +9,11 @@ const escapeHtml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
+const readableRole = (value) =>
+  String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
 const emailConfigIssue = () => {
   if (!env.SMTP_HOST) return 'SMTP is not configured.';
   if (!env.MAIL_FROM && !env.SMTP_USER) return 'Mail sender is not configured.';
@@ -48,6 +53,7 @@ const sendUserInvitationEmail = async ({ user, plainPassword }) => {
   const userId = user.id || user._id.toString();
   const subject = 'Your Worqi account is ready';
   const loginUrl = env.APP_URL;
+  const role = readableRole(user.role);
   const lines = [
     `Hello ${user.name},`,
     '',
@@ -57,7 +63,7 @@ const sendUserInvitationEmail = async ({ user, plainPassword }) => {
     `Login email: ${user.email}`,
     `User ID: ${userId}`,
     `Temporary password: ${plainPassword}`,
-    `Role: ${user.role}`,
+    `Role: ${role}`,
     '',
     'You will be asked to change this temporary password the first time you sign in.',
     'Keep these credentials private.',
@@ -68,7 +74,7 @@ const sendUserInvitationEmail = async ({ user, plainPassword }) => {
     ['Login email', escapeHtml(user.email)],
     ['User ID', escapeHtml(userId)],
     ['Temporary password', escapeHtml(plainPassword)],
-    ['Role', escapeHtml(user.role)],
+    ['Role', escapeHtml(role)],
   ];
 
   try {

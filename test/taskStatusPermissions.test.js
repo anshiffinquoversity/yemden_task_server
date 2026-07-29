@@ -11,6 +11,7 @@ const {
 test('employees can change ordinary statuses but not restricted statuses', () => {
   assert.equal(canEmployeeChangeTaskStatus('open', 'in_progress'), true);
   assert.equal(canEmployeeChangeTaskStatus('in_progress', 'review'), true);
+  assert.equal(canEmployeeChangeTaskStatus('review', 'scheduled'), true);
   assert.equal(canEmployeeChangeTaskStatus('open', 'description_added'), true);
   assert.equal(
     canEmployeeChangeTaskStatus('approved', 'description_added'),
@@ -149,6 +150,39 @@ test('user access level is enforced when selecting published', () => {
       'review',
       'published',
     ),
+    false,
+  );
+});
+
+test('social media handlers can schedule and deliver assigned work', () => {
+  const handler = {
+    role: 'social_media_handler',
+    priorityAccess: 'medium',
+  };
+
+  assert.equal(
+    canUserChangeTaskStatus(handler, 'open', 'in_progress'),
+    true,
+  );
+  assert.equal(
+    canUserChangeTaskStatus(handler, 'review', 'scheduled'),
+    true,
+  );
+  assert.equal(
+    canUserChangeTaskStatus(handler, 'scheduled', 'delivered'),
+    true,
+  );
+  assert.equal(
+    canUserChangeTaskStatus(handler, 'review', 'published'),
+    true,
+  );
+  assert.equal(
+    canUserChangeTaskStatus(handler, 'review', 'approved'),
+    false,
+  );
+  assert.equal(canUserChangeTaskStatus(handler, 'review', 'delivered'), true);
+  assert.equal(
+    canUserChangeTaskStatus(handler, 'published', 'open'),
     false,
   );
 });
