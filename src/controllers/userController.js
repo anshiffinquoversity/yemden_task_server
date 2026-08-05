@@ -15,8 +15,12 @@ const {
   descendingCursorFilter,
   pageFromResults,
 } = require('../utils/pagination');
+const {
+  ensureDefaultRoles,
+  getRoleByKey,
+  userRoleFields,
+} = require('../utils/roleCatalog');
 
-const validRoles = ['admin', 'manager', 'employee', 'social_media_handler'];
 const validStatuses = ['active', 'inactive'];
 const validPriorityAccess = ['low', 'medium', 'high'];
 
@@ -42,10 +46,6 @@ const sanitizeUserInput = (body, { requirePassword = false } = {}) => {
     throw new ApiError(400, 'Password must be at least 8 characters');
   }
 
-  if (payload.role !== undefined && !validRoles.includes(payload.role)) {
-    throw new ApiError(400, `Role must be one of: ${validRoles.join(', ')}`);
-  }
-
   if (payload.priorityAccess !== undefined && !validPriorityAccess.includes(payload.priorityAccess)) {
     throw new ApiError(400, `Access level must be one of: ${validPriorityAccess.join(', ')}`);
   }
@@ -57,6 +57,17 @@ const sanitizeUserInput = (body, { requirePassword = false } = {}) => {
   return payload;
 };
 
+const ensureRoleExists = async (roleKey) => {
+  const role = await getRoleByKey(roleKey);
+  if (!role) throw new ApiError(400, 'Selected role does not exist');
+  return role;
+};
+
+const formatUser = async (user) => ({
+  ...(typeof user.toJSON === 'function' ? user.toJSON() : user),
+  ...(await userRoleFields(user)),
+});
+
 const createUser = async (req, res) => {
   const payload = sanitizeUserInput(req.body, { requirePassword: true });
   const plainPassword = payload.password;
@@ -64,6 +75,8 @@ const createUser = async (req, res) => {
   if (!payload.name || !payload.email) {
     throw new ApiError(400, 'Name, email, and password are required');
   }
+
+  await ensureRoleExists(payload.role || 'employee');
 
   const existingUser = await User.findOne({ email: payload.email });
 
@@ -86,15 +99,13 @@ const createUser = async (req, res) => {
     plainPassword,
   });
 
-  res.status(201).json({ user, invitationEmail });
+  res.status(201).json({ user: await formatUser(user), invitationEmail });
 };
 
 const listUsers = async (req, res) => {
   const filters = {};
   if (req.query.role) {
-    if (!validRoles.includes(req.query.role)) {
-      throw new ApiError(400, 'Invalid user role filter');
-    }
+    await ensureRoleExists(req.query.role);
     filters.role = req.query.role;
   }
   if (req.query.status) {
@@ -115,15 +126,19 @@ const listUsers = async (req, res) => {
     .limit(limit + 1);
   const page = pageFromResults(results, limit);
 
-  res.json({ users: page.items, pageInfo: page.pageInfo });
+  res.json({
+    users: await Promise.all(page.items.map(formatUser)),
+    pageInfo: page.pageInfo,
+  });
 };
 
 const listUserOptions = async (_req, res) => {
+  await ensureDefaultRoles();
   const users = await User.find()
     .select('name email role status priorityAccess')
     .sort({ name: 1, _id: 1 });
 
-  res.json({ users });
+  res.json({ users: await Promise.all(users.map(formatUser)) });
 };
 
 const getUserById = async (req, res) => {
@@ -135,7 +150,7 @@ const getUserById = async (req, res) => {
     throw new ApiError(404, 'User not found');
   }
 
-  res.json({ user });
+  res.json({ user: await formatUser(user) });
 };
 
 const updateUser = async (req, res) => {
@@ -148,6 +163,8 @@ const updateUser = async (req, res) => {
   }
 
   const payload = sanitizeUserInput(req.body);
+
+  if (payload.role !== undefined) await ensureRoleExists(payload.role);
 
   if (payload.email && payload.email !== user.email) {
     const existingUser = await User.findOne({ email: payload.email });
@@ -162,7 +179,7 @@ const updateUser = async (req, res) => {
   }
   await user.save();
 
-  res.json({ user });
+  res.json({ user: await formatUser(user) });
 };
 
 const deactivateUser = async (req, res) => {
@@ -182,7 +199,7 @@ const deactivateUser = async (req, res) => {
     throw new ApiError(404, 'User not found');
   }
 
-  res.json({ message: 'User deactivated', user });
+  res.json({ message: 'User deactivated', user: await formatUser(user) });
 };
 
 const permanentlyDeleteUser = async (req, res) => {

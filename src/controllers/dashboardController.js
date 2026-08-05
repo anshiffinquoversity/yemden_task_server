@@ -6,6 +6,7 @@ const {
   getTaskQueryForUser,
   countVisibleEmployeeProjects,
 } = require('../utils/accessControl');
+const { taskScopeFor } = require('../utils/roleCatalog');
 const { getTaskStatusKeysByCategory } = require('../utils/taskStatusCatalog');
 
 const defaultDashboardTaskStatuses = {
@@ -30,7 +31,8 @@ const getDashboardSummary = async (req, res) => {
     (statusKey) => !excludedOverdueStatusKeys.has(statusKey)
   );
 
-  const totalProjectsPromise = isEmployee(req.user)
+  const totalProjectsPromise =
+    isEmployee(req.user) || taskScopeFor(req.user) === 'assigned'
     ? countVisibleEmployeeProjects(req.user)
     : Project.countDocuments(projectQuery);
 

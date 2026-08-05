@@ -1,5 +1,9 @@
 const TaskStatus = require('../models/TaskStatus');
 const { ApiError } = require('./http');
+const {
+  canChangeToTaskStatus,
+  roleDefinitionFor,
+} = require('./roleCatalog');
 
 const validStatusCategories = ['open', 'closed', 'canceled'];
 const approvedTaskStatusKey = 'approved';
@@ -124,9 +128,8 @@ const canManagerChangeTaskStatus = (previousStatus, nextStatus) => {
   const nextKey = normalizeStatusKey(nextStatus);
 
   if (previousKey === nextKey) return true;
-  if (finalTaskStatusKeys.includes(previousKey)) return false;
-  if (previousKey === approvedTaskStatusKey) return true;
-  return nextKey === approvedTaskStatusKey;
+  return !['canceled', 'cancelled'].includes(previousKey) &&
+    !['canceled', 'cancelled'].includes(nextKey);
 };
 
 const canUserChangeTaskStatus = (userOrRole, previousStatus, nextStatus) => {
@@ -134,6 +137,13 @@ const canUserChangeTaskStatus = (userOrRole, previousStatus, nextStatus) => {
     typeof userOrRole === 'string' ? userOrRole : userOrRole?.role;
   const priorityAccess =
     typeof userOrRole === 'object' ? userOrRole?.priorityAccess : undefined;
+
+  if (typeof userOrRole === 'object' && roleDefinitionFor(userOrRole)) {
+    if (normalizeStatusKey(previousStatus) === normalizeStatusKey(nextStatus)) {
+      return true;
+    }
+    return canChangeToTaskStatus(userOrRole, nextStatus);
+  }
 
   if (role === 'admin') return true;
   if (role === 'employee') {

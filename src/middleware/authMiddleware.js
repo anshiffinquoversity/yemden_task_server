@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { env } = require('../config/env');
 const User = require('../models/User');
+const { attachRoleDefinition } = require('../utils/roleCatalog');
 
 const passwordChangeAllowedPaths = new Set([
   '/api/auth/me',
@@ -33,6 +34,13 @@ const protect = async (req, res, next) => {
     if (user.status !== 'active') {
       return res.status(403).json({
         message: 'Your account is inactive. Please contact the admin.',
+      });
+    }
+
+    const roleDefinition = await attachRoleDefinition(user);
+    if (!roleDefinition) {
+      return res.status(403).json({
+        message: 'Your assigned role no longer exists. Please contact the admin.',
       });
     }
 

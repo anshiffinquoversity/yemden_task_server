@@ -397,6 +397,10 @@ const deleteProject = async (req, res) => {
     throw new ApiError(404, 'Project not found');
   }
 
+  if (!canViewProject(req.user, project)) {
+    throw new ApiError(403, 'You cannot delete this project');
+  }
+
   const projectTasks = await Task.find({ project: project._id })
     .select('_id thumbnailUrl')
     .lean();

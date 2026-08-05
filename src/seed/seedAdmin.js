@@ -2,9 +2,11 @@ const mongoose = require('mongoose');
 const { connectDatabase } = require('../config/db');
 const { env } = require('../config/env');
 const User = require('../models/User');
+const { ensureDefaultRoles } = require('../utils/roleCatalog');
 
 const seedAdmin = async () => {
   await connectDatabase();
+  await ensureDefaultRoles();
 
   const existingAdmin = await User.findOne({ email: env.ADMIN_EMAIL.toLowerCase() });
 

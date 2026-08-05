@@ -1,6 +1,13 @@
 const Project = require("../models/Project");
 const Task = require("../models/Task");
 const { sameId } = require("./http");
+const {
+  canSeeTaskStatus,
+  hasPermission,
+  roleDefinitionFor,
+  statusVisibilityQueryFor,
+  taskScopeFor,
+} = require("./roleCatalog");
 
 const isAdmin = (user) => user?.role === "admin";
 const isManager = (user) => user?.role === "manager";
@@ -37,7 +44,7 @@ const isHighAccessEmployee = (user) =>
   isEmployee(user) && hasPriorityAccess(user, "high");
 
 const getProjectQueryForUser = (user) => {
-  if (isAdmin(user)) return {};
+  if (taskScopeFor(user) === "all") return {};
 
   return {
     $or: [{ owner: user._id }, { members: user._id }],
@@ -52,27 +59,36 @@ const getVisibleProjectIds = async (user) => {
 };
 
 const getTaskQueryForUser = async (user) => {
-  if (isAdmin(user)) return {};
+  const roleDefinition = roleDefinitionFor(user);
+  const statusQuery = statusVisibilityQueryFor(user);
+  const scope = taskScopeFor(user);
+  let scopeQuery;
 
-  if (isEmployee(user)) {
+  if (scope === "all") {
+    scopeQuery = {};
+  } else if (scope === "projects") {
+    const projectIds = await getVisibleProjectIds(user);
+    scopeQuery = { project: { $in: projectIds } };
+  } else if (!roleDefinition && isEmployee(user)) {
     if (isHighAccessEmployee(user)) {
       const projectIds = await getVisibleProjectIds(user);
-      if (projectIds.length === 0) return { assignedTo: user._id };
+      if (projectIds.length === 0) scopeQuery = { assignedTo: user._id };
 
-      return {
+      scopeQuery ||= {
         $or: [{ assignedTo: user._id }, { project: { $in: projectIds } }],
       };
+    } else {
+      scopeQuery = { assignedTo: user._id };
     }
-
-    return { assignedTo: user._id };
+  } else {
+    scopeQuery = { assignedTo: user._id };
   }
 
-  const projectIds = await getVisibleProjectIds(user);
-  return { project: { $in: projectIds } };
+  return combineQuery(scopeQuery, statusQuery);
 };
 
 const canViewProject = (user, project) => {
-  if (isAdmin(user)) return true;
+  if (taskScopeFor(user) === "all") return true;
   return (
     sameId(project.owner, user._id) ||
     project.members.some((member) => sameId(member, user._id))
@@ -80,29 +96,40 @@ const canViewProject = (user, project) => {
 };
 
 const canManageProjectWork = (user, project) => {
-  if (isAdmin(user)) return true;
-  if (!isManager(user)) return false;
-  return (
-    sameId(project.owner, user._id) ||
-    project.members.some((member) => sameId(member, user._id))
-  );
+  if (!hasPermission(user, "manageProjects")) return false;
+  return canViewProject(user, project);
 };
 
 const canManageTaskWork = (user, project) => {
-  if (canManageProjectWork(user, project)) return true;
-  if (!isHighAccessEmployee(user)) return false;
+  if (!hasPermission(user, "manageTasks")) return false;
   return canViewProject(user, project);
 };
 
 const canEditTask = (user, task) => {
-  if (isAdmin(user)) return true;
-  if (isManager(user)) {
-    return Boolean(task?.project) && canManageProjectWork(user, task.project);
+  if (roleDefinitionFor(user)) {
+    return (
+      hasPermission(user, "manageTasks") &&
+      canSeeTaskStatus(user, task?.status) &&
+      Boolean(task?.project) &&
+      canViewProject(user, task.project)
+    );
   }
+  if (isAdmin(user)) return true;
+  if (isManager(user)) return Boolean(task?.project) && canManageProjectWork(user, task.project);
   return isHighAccessEmployee(user) && isTaskCreator(task, user._id);
 };
 
 const canUpdateTaskStatus = (user, task) => {
+  if (roleDefinitionFor(user)) {
+    if (!hasPermission(user, "changeTaskStatus")) return false;
+    if (!canSeeTaskStatus(user, task?.status)) return false;
+    const scope = taskScopeFor(user);
+    if (scope === "all") return true;
+    if (scope === "projects") {
+      return Boolean(task?.project) && canViewProject(user, task.project);
+    }
+    return hasAssignedUser(task, user._id);
+  }
   if (isAdmin(user)) return true;
   if (isManager(user))
     return Boolean(task.project) && canManageProjectWork(user, task.project);
@@ -113,7 +140,13 @@ const canUpdateTaskStatus = (user, task) => {
   );
 };
 
-const canCancelTasks = (user) => isAdmin(user) || isManager(user);
+const canDeleteTask = (user, task) =>
+  hasPermission(user, "deleteTasks") &&
+  canSeeTaskStatus(user, task?.status) &&
+  Boolean(task?.project) &&
+  canViewProject(user, task.project);
+
+const canCancelTasks = (user) => hasPermission(user, "deleteTasks");
 
 const combineQuery = (visibilityQuery, filters = {}) => {
   const parts = [];
@@ -160,6 +193,7 @@ module.exports = {
   canManageTaskWork,
   canEditTask,
   canUpdateTaskStatus,
+  canDeleteTask,
   canCancelTasks,
   combineQuery,
   countVisibleEmployeeProjects,

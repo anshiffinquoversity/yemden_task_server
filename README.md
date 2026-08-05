@@ -12,8 +12,8 @@ Node.js + Express + MongoDB API for the internal project/task management MVP.
 - Monthly calendar task API
 - Dashboard summary API
 - Cursor-paginated list APIs with bounded page sizes
-- Simple role checks for `admin`, `manager`, `employee`, and
-  `social_media_handler` (employee access plus publishing)
+- Dynamic admin-managed roles with priority, task scope, action permissions,
+  visible task statuses, and allowed status changes
 
 ## Folder Structure
 
@@ -167,6 +167,11 @@ npm run migrate:upload-origins -- --apply
 POST /api/auth/login
 GET  /api/auth/me
 
+GET    /api/roles
+POST   /api/roles
+PUT    /api/roles/:id
+DELETE /api/roles/:id
+
 POST   /api/users
 GET    /api/users?limit=25&cursor=OPAQUE_CURSOR
 GET    /api/users/options
@@ -191,6 +196,13 @@ GET    /api/tasks/calendar?month=7&year=2026
 
 GET /api/dashboard/summary
 ```
+
+The built-in admin, manager, employee, and social-media-handler roles are
+created automatically the first time role-aware authentication runs. Existing
+users keep their current role key, so no one-off role migration is required.
+Only admins can create, edit, or delete role definitions. A role cannot be
+deleted while users are assigned to it, and the admin role always retains full
+access.
 
 ## Pagination
 

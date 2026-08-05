@@ -11,7 +11,7 @@ const {
 const populateNotification = (query) =>
   query
     .populate('actor', 'name email role status')
-    .populate('task', 'title status dueDate')
+    .populate('task', 'title status dueDate approvedAt')
     .populate('project', 'title color');
 
 const listNotifications = async (req, res) => {

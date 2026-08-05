@@ -1,8 +1,9 @@
 const User = require('../models/User');
 const { generateToken } = require('../utils/generateToken');
 const { ApiError } = require('../utils/http');
+const { userRoleFields } = require('../utils/roleCatalog');
 
-const formatUser = (user) => ({
+const formatUser = async (user) => ({
   id: user._id.toString(),
   name: user.name,
   email: user.email,
@@ -10,6 +11,7 @@ const formatUser = (user) => ({
   priorityAccess: user.priorityAccess || 'medium',
   status: user.status,
   mustChangePassword: user.mustChangePassword === true,
+  ...(await userRoleFields(user, { includeDefinition: true })),
 });
 
 const login = async (req, res) => {
@@ -39,12 +41,12 @@ const login = async (req, res) => {
 
   res.json({
     token: generateToken(user),
-    user: formatUser(user),
+    user: await formatUser(user),
   });
 };
 
 const getMe = async (req, res) => {
-  res.json({ user: formatUser(req.user) });
+  res.json({ user: await formatUser(req.user) });
 };
 
 const changePassword = async (req, res) => {
@@ -83,7 +85,7 @@ const changePassword = async (req, res) => {
 
   res.json({
     message: 'Password changed successfully',
-    user: formatUser(user),
+    user: await formatUser(user),
   });
 };
 

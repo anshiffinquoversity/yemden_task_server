@@ -23,7 +23,9 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['admin', 'manager', 'employee', 'social_media_handler'],
+      lowercase: true,
+      trim: true,
+      match: /^[a-z0-9_]+$/,
       default: 'employee',
     },
     priorityAccess: {
@@ -47,6 +49,12 @@ const userSchema = new mongoose.Schema(
 userSchema.index({ createdAt: -1, _id: -1 });
 userSchema.index({ role: 1, createdAt: -1, _id: -1 });
 userSchema.index({ status: 1, createdAt: -1, _id: -1 });
+
+// Keep the original built-in values discoverable for older integrations while
+// allowing any validated role key backed by the Role collection.
+userSchema
+  .path('role')
+  .enumValues.push('admin', 'manager', 'employee', 'social_media_handler');
 
 userSchema.pre('save', async function hashPassword() {
   if (!this.isModified('password')) return;

@@ -14,6 +14,8 @@ const taskRoutes = require('./routes/taskRoutes');
 const taskStatusRoutes = require('./routes/taskStatusRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const roleRoutes = require('./routes/roleRoutes');
+const { showTaskSharePage } = require('./controllers/taskShareController');
 const { env } = require('./config/env');
 const { createCorsOriginHandler } = require('./config/cors');
 const { notFound, errorMiddleware } = require('./middleware/errorMiddleware');
@@ -68,10 +70,13 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/share/tasks/:id', showTaskSharePage);
+
 app.use('/uploads', express.static(uploadsPath));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/roles', roleRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/task-statuses', taskStatusRoutes);
 app.use('/api/tasks', taskRoutes);

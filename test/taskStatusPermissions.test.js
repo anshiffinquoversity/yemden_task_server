@@ -93,18 +93,21 @@ test('renamed open status is not restricted by its legacy canceled key', () => {
   );
 });
 
-test('managers use approved as the status transition gate', () => {
+test('managers can select any non-canceled task status', () => {
   assert.equal(canManagerChangeTaskStatus('open', 'approved'), true);
-  assert.equal(canManagerChangeTaskStatus('open', 'review'), false);
-  assert.equal(canManagerChangeTaskStatus('open', 'published'), false);
+  assert.equal(canManagerChangeTaskStatus('open', 'review'), true);
+  assert.equal(canManagerChangeTaskStatus('open', 'published'), true);
+  assert.equal(canManagerChangeTaskStatus('open', 'delivered'), true);
   assert.equal(canManagerChangeTaskStatus('approved', 'open'), true);
   assert.equal(canManagerChangeTaskStatus('approved', 'published'), true);
   assert.equal(canManagerChangeTaskStatus('approved', 'delivered'), true);
-});
+  assert.equal(canManagerChangeTaskStatus('published', 'open'), true);
+  assert.equal(canManagerChangeTaskStatus('delivered', 'approved'), true);
+  assert.equal(canManagerChangeTaskStatus('open', 'canceled'), false);
+  assert.equal(canManagerChangeTaskStatus('open', 'cancelled'), false);
+  assert.equal(canManagerChangeTaskStatus('canceled', 'open'), false);
+  assert.equal(canManagerChangeTaskStatus('cancelled', 'open'), false);
 
-test('published and delivered are terminal for managers but not admins', () => {
-  assert.equal(canManagerChangeTaskStatus('published', 'open'), false);
-  assert.equal(canManagerChangeTaskStatus('delivered', 'approved'), false);
   assert.equal(
     canUserChangeTaskStatus('admin', 'published', 'open'),
     true,

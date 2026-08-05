@@ -25,6 +25,7 @@ const {
   canManageTaskWork,
   canEditTask,
   canUpdateTaskStatus,
+  canDeleteTask,
   combineQuery,
 } = require("../utils/accessControl");
 const {
@@ -33,9 +34,14 @@ const {
   resolveTaskStatusPolicyKey,
   getTaskStatusKeysByCategory,
   canUserChangeTaskStatus,
-  enrichTaskWithStatusInfo,
   enrichTasksWithStatusInfo,
 } = require("../utils/taskStatusCatalog");
+const {
+  canChangeToTaskStatus,
+  canSeeTaskStatus,
+  hasPermission,
+  roleDefinitionFor,
+} = require("../utils/roleCatalog");
 const {
   createTaskActivity,
   deleteTaskCollaboration,
@@ -49,6 +55,7 @@ const {
   deleteTaskThumbnailFile,
   taskThumbnailUrlForFile,
 } = require("../utils/taskThumbnail");
+const { enrichTasksWithBanners } = require("../services/taskShareService");
 
 const validPriorities = ["low", "medium", "high"];
 const excludedOverdueStatusKeys = new Set([
@@ -103,8 +110,31 @@ const populateTaskList = (query) =>
     .populate("assignedTo", "name email role status")
     .populate("createdBy", "name email role");
 
+const enrichTaskResponses = async (tasks) => {
+  const tasksWithBanners = await enrichTasksWithBanners(tasks);
+  return enrichTasksWithStatusInfo(tasksWithBanners);
+};
+
+const enrichTaskResponse = async (task) => {
+  const [enriched] = await enrichTaskResponses([task]);
+  return enriched;
+};
+
 const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   if (previousStatus === statusKey) return;
+
+  if (roleDefinitionFor(user)) {
+    if (
+      previousStatus === undefined &&
+      hasPermission(user, "manageTasks") &&
+      canSeeTaskStatus(user, statusKey)
+    ) {
+      return resolveTaskStatusPolicyKey(statusKey);
+    }
+    if (!canChangeToTaskStatus(user, statusKey)) {
+      throw new ApiError(403, "Your role cannot change tasks to this status");
+    }
+  }
 
   const [statusPolicyKey, previousStatusPolicyKey] = await Promise.all([
     resolveTaskStatusPolicyKey(statusKey),
@@ -116,7 +146,7 @@ const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
     statusPolicyKey === "canceled" ||
     previousStatusPolicyKey === "canceled";
 
-  if (changesCanceledStatus && !isAdmin(user)) {
+  if (changesCanceledStatus && !roleDefinitionFor(user) && !isAdmin(user)) {
     throw new ApiError(
       403,
       "Only admins can change tasks to or from a canceled status. Managers and employees can request cancellation from an admin.",
@@ -124,6 +154,7 @@ const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   }
 
   if (
+    roleDefinitionFor(user) ||
     canUserChangeTaskStatus(
       user,
       previousStatusPolicyKey,
@@ -151,7 +182,7 @@ const ensureUserCanSetTaskStatus = async (user, statusKey, previousStatus) => {
   if (isManager(user)) {
     throw new ApiError(
       403,
-      "Managers must move tasks to Approved before selecting another status, and cannot change Published or Delivered tasks",
+      "Managers can select any task status except Canceled",
     );
   }
 
@@ -464,6 +495,7 @@ const createTask = async (req, res) => {
     project,
     assignedTo,
     status: statusKey,
+    approvedAt: statusPolicyKey === "approved" ? new Date() : null,
     priority: priority || "medium",
     startDate: parseOptionalDate(req.body.startDate),
     dueDate: parseOptionalDate(req.body.dueDate),
@@ -501,7 +533,7 @@ const createTask = async (req, res) => {
   }
 
   const createdTask = await populateTask(Task.findById(task._id));
-  sendCreated(res, "task", await enrichTaskWithStatusInfo(createdTask));
+  sendCreated(res, "task", await enrichTaskResponse(createdTask));
 };
 
 const listTasks = async (req, res) => {
@@ -519,7 +551,7 @@ const listTasks = async (req, res) => {
   const page = pageFromResults(results, limit);
 
   res.json({
-    tasks: await enrichTasksWithStatusInfo(page.items),
+    tasks: await enrichTaskResponses(page.items),
     pageInfo: page.pageInfo,
   });
 };
@@ -536,7 +568,7 @@ const getTaskById = async (req, res) => {
     throw new ApiError(404, "Task not found");
   }
 
-  res.json({ task: await enrichTaskWithStatusInfo(task) });
+  res.json({ task: await enrichTaskResponse(task) });
 };
 
 const listTasksByProject = async (req, res) => {
@@ -555,16 +587,17 @@ const listTasksByProject = async (req, res) => {
   const page = pageFromResults(results, limit);
 
   res.json({
-    tasks: await enrichTasksWithStatusInfo(page.items),
+    tasks: await enrichTaskResponses(page.items),
     pageInfo: page.pageInfo,
   });
 };
 
 const listMyTasks = async (req, res) => {
+  const visibilityQuery = await getTaskQueryForUser(req.user);
   const limit = parsePageSize(req.query.limit);
   const cursor = decodeCursor(req.query.cursor);
   const query = combineQuery(
-    { assignedTo: req.user._id },
+    combineQuery(visibilityQuery, { assignedTo: req.user._id }),
     descendingCursorFilter(cursor),
   );
   const results = await populateTaskList(Task.find(query))
@@ -573,7 +606,7 @@ const listMyTasks = async (req, res) => {
   const page = pageFromResults(results, limit);
 
   res.json({
-    tasks: await enrichTasksWithStatusInfo(page.items),
+    tasks: await enrichTaskResponses(page.items),
     pageInfo: page.pageInfo,
   });
 };
@@ -649,6 +682,16 @@ const updateTask = async (req, res) => {
     );
     if (statusPolicyKey === "published" && previousStatus !== statusKey) {
       await ensureTaskHasPublishedAsset(task._id);
+    }
+    if (statusPolicyKey === "approved" && !task.approvedAt) {
+      task.approvedAt = new Date();
+    } else if (!task.approvedAt) {
+      const previousStatusPolicyKey = await resolveTaskStatusPolicyKey(
+        previousStatus,
+      );
+      if (previousStatusPolicyKey === "approved") {
+        task.approvedAt = new Date();
+      }
     }
     task.status = statusKey;
   }
@@ -743,7 +786,7 @@ const updateTask = async (req, res) => {
   }
 
   const updatedTask = await populateTask(Task.findById(task._id));
-  res.json({ task: await enrichTaskWithStatusInfo(updatedTask) });
+  res.json({ task: await enrichTaskResponse(updatedTask) });
 };
 
 const updateTaskStatus = async (req, res) => {
@@ -772,6 +815,16 @@ const updateTaskStatus = async (req, res) => {
   }
 
   const previousStatus = task.status;
+  if (statusPolicyKey === "approved" && !task.approvedAt) {
+    task.approvedAt = new Date();
+  } else if (!task.approvedAt) {
+    const previousStatusPolicyKey = await resolveTaskStatusPolicyKey(
+      previousStatus,
+    );
+    if (previousStatusPolicyKey === "approved") {
+      task.approvedAt = new Date();
+    }
+  }
   task.status = statusKey;
   await task.save();
 
@@ -796,7 +849,7 @@ const updateTaskStatus = async (req, res) => {
   }
 
   const updatedTask = await populateTask(Task.findById(task._id));
-  res.json({ task: await enrichTaskWithStatusInfo(updatedTask) });
+  res.json({ task: await enrichTaskResponse(updatedTask) });
 };
 
 const requestTaskCancellation = async (req, res) => {
@@ -808,7 +861,11 @@ const requestTaskCancellation = async (req, res) => {
     throw new ApiError(404, "Task not found");
   }
 
-  if (!isManager(req.user) && !isEmployee(req.user)) {
+  if (
+    !roleDefinitionFor(req.user) &&
+    !isManager(req.user) &&
+    !isEmployee(req.user)
+  ) {
     throw new ApiError(
       403,
       "Only managers, employees, and social media handlers can request task cancellation",
@@ -877,7 +934,7 @@ const deleteTask = async (req, res) => {
     throw new ApiError(404, "Task not found");
   }
 
-  if (!canManageProjectWork(req.user, task.project)) {
+  if (!canDeleteTask(req.user, task)) {
     throw new ApiError(403, "You cannot delete this task");
   }
 
@@ -921,7 +978,7 @@ const listCalendarTasks = async (req, res) => {
     Task.find(combineQuery(visibilityQuery, filters)),
   ).sort({ startDate: 1 });
 
-  const enrichedTasks = await enrichTasksWithStatusInfo(tasks);
+  const enrichedTasks = await enrichTaskResponses(tasks);
 
   res.json({
     month,

@@ -1,5 +1,6 @@
 const Task = require('../models/Task');
 const TaskStatus = require('../models/TaskStatus');
+const { Role } = require('../models/Role');
 const { ApiError, assertObjectId, sendCreated } = require('../utils/http');
 const {
   validStatusCategories,
@@ -8,6 +9,10 @@ const {
   listTaskStatuses,
   taskStatusToJson,
 } = require('../utils/taskStatusCatalog');
+const {
+  canChangeToTaskStatus,
+  canSeeTaskStatus,
+} = require('../utils/roleCatalog');
 
 const statusPayload = (body, { creating = false } = {}) => {
   const payload = {};
@@ -46,9 +51,17 @@ const statusPayload = (body, { creating = false } = {}) => {
   return payload;
 };
 
-const getTaskStatuses = async (_req, res) => {
+const getTaskStatuses = async (req, res) => {
   const statuses = await listTaskStatuses();
-  res.json({ taskStatuses: statuses.map(taskStatusToJson) });
+  res.json({
+    taskStatuses: statuses
+      .map(taskStatusToJson)
+      .filter((status) => canSeeTaskStatus(req.user, status.key))
+      .map((status) => ({
+        ...status,
+        canChangeTo: canChangeToTaskStatus(req.user, status.key),
+      })),
+  });
 };
 
 const createTaskStatus = async (req, res) => {
@@ -164,6 +177,15 @@ const deleteTaskStatus = async (req, res) => {
   }
 
   await status.deleteOne();
+  await Role.updateMany(
+    {},
+    {
+      $pull: {
+        'statusVisibility.statusKeys': status.key,
+        'statusChange.statusKeys': status.key,
+      },
+    },
+  );
   res.json({ message: 'Task status deleted' });
 };
 

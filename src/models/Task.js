@@ -42,6 +42,7 @@ const taskSchema = new mongoose.Schema(
     startDate: Date,
     dueDate: Date,
     reminderAt: Date,
+    approvedAt: Date,
     reminderLeadSentAt: Date,
     reminderSentAt: Date,
     createdBy: {

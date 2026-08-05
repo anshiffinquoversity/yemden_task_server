@@ -9,18 +9,26 @@ const {
   permanentlyDeleteUser,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
-const { requireRole } = require('../middleware/roleMiddleware');
+const { requirePermission } = require('../middleware/permissionMiddleware');
 
 const router = Router();
 
 router.use(protect);
 
-router.post('/', requireRole('admin'), createUser);
-router.get('/options', requireRole('admin', 'manager'), listUserOptions);
-router.get('/', requireRole('admin', 'manager'), listUsers);
-router.get('/:id', requireRole('admin', 'manager'), getUserById);
-router.put('/:id', requireRole('admin'), updateUser);
-router.delete('/:id/permanent', requireRole('admin'), permanentlyDeleteUser);
-router.delete('/:id', requireRole('admin'), deactivateUser);
+router.post('/', requirePermission('manageUsers'), createUser);
+router.get(
+  '/options',
+  requirePermission('manageUsers', 'manageTasks', 'manageProjects'),
+  listUserOptions,
+);
+router.get('/', requirePermission('manageUsers'), listUsers);
+router.get('/:id', requirePermission('manageUsers'), getUserById);
+router.put('/:id', requirePermission('manageUsers'), updateUser);
+router.delete(
+  '/:id/permanent',
+  requirePermission('manageUsers'),
+  permanentlyDeleteUser,
+);
+router.delete('/:id', requirePermission('manageUsers'), deactivateUser);
 
 module.exports = router;

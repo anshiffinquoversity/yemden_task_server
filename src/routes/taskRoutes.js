@@ -19,8 +19,9 @@ const {
   listTaskPublicationAssets,
   updateTaskPublicationAssets,
 } = require('../controllers/taskCollaborationController');
+const { createTaskShareLink } = require('../controllers/taskShareController');
 const { protect } = require('../middleware/authMiddleware');
-const { requireRole } = require('../middleware/roleMiddleware');
+const { requirePermission } = require('../middleware/permissionMiddleware');
 const {
   commentUpload,
   taskThumbnailUpload,
@@ -38,6 +39,7 @@ router.get('/', listTasks);
 router.get('/:id/collaboration', listTaskCollaboration);
 router.get('/:id/publication-assets', listTaskPublicationAssets);
 router.put('/:id/publication-assets', updateTaskPublicationAssets);
+router.post('/:id/share-link', createTaskShareLink);
 router.post('/:id/comments', commentUpload.array('files', 8), createTaskComment);
 router.delete('/:id/comments/:commentId', deleteTaskComment);
 router.post('/:id/documents', createTaskDocument);
@@ -45,6 +47,6 @@ router.post('/:id/cancellation-request', requestTaskCancellation);
 router.get('/:id', getTaskById);
 router.put('/:id', taskThumbnailUpload.single('thumbnail'), updateTask);
 router.patch('/:id/status', updateTaskStatus);
-router.delete('/:id', requireRole('admin', 'manager'), deleteTask);
+router.delete('/:id', requirePermission('deleteTasks'), deleteTask);
 
 module.exports = router;
