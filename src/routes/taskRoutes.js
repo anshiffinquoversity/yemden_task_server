@@ -9,6 +9,7 @@ const {
   listTasksByProject,
   requestTaskCancellation,
   updateTask,
+  updateTaskMetaAdStatus,
   updateTaskStatus,
 } = require('../controllers/taskController');
 const {
@@ -47,6 +48,7 @@ router.post('/:id/cancellation-request', requestTaskCancellation);
 router.get('/:id', getTaskById);
 router.put('/:id', taskThumbnailUpload.single('thumbnail'), updateTask);
 router.patch('/:id/status', updateTaskStatus);
+router.patch('/:id/meta-ad-status', updateTaskMetaAdStatus);
 router.delete('/:id', requirePermission('deleteTasks'), deleteTask);
 
 module.exports = router;

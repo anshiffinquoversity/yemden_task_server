@@ -15,6 +15,7 @@ const taskStatusRoutes = require('./routes/taskStatusRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const roleRoutes = require('./routes/roleRoutes');
+const mediaLibraryRoutes = require('./routes/mediaLibraryRoutes');
 const { showTaskSharePage } = require('./controllers/taskShareController');
 const { env } = require('./config/env');
 const { createCorsOriginHandler } = require('./config/cors');
@@ -81,6 +82,7 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/task-statuses', taskStatusRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/media-library', mediaLibraryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
 if (fs.existsSync(frontendIndexPath)) {

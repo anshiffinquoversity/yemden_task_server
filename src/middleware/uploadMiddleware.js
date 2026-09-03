@@ -8,10 +8,12 @@ const { ApiError } = require('../utils/http');
 const commentUploadPath = path.resolve(__dirname, '../../uploads/task-comments');
 const projectLogoUploadPath = path.resolve(__dirname, '../../uploads/project-logos');
 const taskThumbnailUploadPath = path.resolve(__dirname, '../../uploads/task-thumbnails');
+const mediaLibraryUploadPath = path.resolve(__dirname, '../../uploads/media-library');
 
 fs.mkdirSync(commentUploadPath, { recursive: true });
 fs.mkdirSync(projectLogoUploadPath, { recursive: true });
 fs.mkdirSync(taskThumbnailUploadPath, { recursive: true });
+fs.mkdirSync(mediaLibraryUploadPath, { recursive: true });
 
 const safeExtension = (filename) => {
   const extension = path.extname(filename || '').toLowerCase();
@@ -79,6 +81,11 @@ const isAllowedCommentUpload = (file) => {
 const isAllowedImageUpload = (file) => {
   const mimetype = String(file.mimetype || '').toLowerCase();
   return mimetype.startsWith('image/');
+};
+
+const isAllowedMediaLibraryUpload = (file) => {
+  const mimetype = String(file.mimetype || '').toLowerCase();
+  return mimetype.startsWith('image/') || mimetype.startsWith('video/');
 };
 
 const allowedTaskThumbnailMimeTypes = new Set([
@@ -150,8 +157,25 @@ const taskThumbnailUpload = multer({
   },
 });
 
+const mediaLibraryUpload = multer({
+  storage: storageFor(mediaLibraryUploadPath),
+  limits: {
+    files: 1,
+    fileSize: 50 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, callback) => {
+    if (!isAllowedMediaLibraryUpload(file)) {
+      callback(new ApiError(400, 'Media Library accepts only photo and video files'));
+      return;
+    }
+
+    callback(null, true);
+  },
+});
+
 module.exports = {
   commentUpload,
+  mediaLibraryUpload,
   projectLogoUpload,
   taskThumbnailUpload,
 };

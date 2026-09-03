@@ -1,5 +1,6 @@
 const Project = require("../models/Project");
 const Task = require("../models/Task");
+const TaskActivity = require("../models/TaskActivity");
 const User = require("../models/User");
 const {
   ApiError,
@@ -58,6 +59,14 @@ const {
 const { enrichTasksWithBanners } = require("../services/taskShareService");
 
 const validPriorities = ["low", "medium", "high"];
+const validMetaAdStatuses = [
+  "none",
+  "ad_posted",
+  "ad_started",
+  "ad_paused",
+  "ad_stopped",
+];
+const validTaskTypes = ["all", "normal", "ad"];
 const excludedOverdueStatusKeys = new Set([
   "canceled",
   "cancelled",
@@ -95,6 +104,63 @@ const isTruthyBodyValue = (value) =>
   value === 1 ||
   String(value || "").trim().toLowerCase() === "true" ||
   String(value || "").trim() === "1";
+
+const normalizedTaskType = (value, fallback = "all") => {
+  const taskType = String(value || fallback).trim().toLowerCase();
+  if (!validTaskTypes.includes(taskType)) {
+    throw new ApiError(
+      400,
+      `Task type must be one of: ${validTaskTypes.join(", ")}`,
+    );
+  }
+  return taskType;
+};
+
+const metaAdStatusFilter = (value) => {
+  if (value === "none") return { $in: ["none", null] };
+  if (value === "ad_started") return { $in: ["ad_started", "ad_posted"] };
+  return value;
+};
+
+const normalizedMetaAdStatus = (value) => {
+  const metaAdStatus = String(value || "").trim().toLowerCase();
+  if (!validMetaAdStatuses.includes(metaAdStatus)) {
+    throw new ApiError(
+      400,
+      `Meta ad status must be one of: ${validMetaAdStatuses.join(", ")}`,
+    );
+  }
+  return metaAdStatus;
+};
+
+const taskTypeMetaAdFilter = (taskType) => {
+  if (taskType === "normal") return { $in: ["none", null] };
+  if (taskType === "ad") return { $nin: ["none", null] };
+  return null;
+};
+
+const applyMetaAdFilters = (filters, query) => {
+  const taskType = normalizedTaskType(query.taskType);
+  const typeFilter = taskTypeMetaAdFilter(taskType);
+  let statusFilter = null;
+
+  if (query.metaAdStatus) {
+    const metaAdStatus = normalizedMetaAdStatus(query.metaAdStatus);
+    statusFilter = metaAdStatusFilter(metaAdStatus);
+  }
+
+  if (typeFilter && statusFilter) {
+    filters.$and = [
+      ...(filters.$and || []),
+      { metaAdStatus: typeFilter },
+      { metaAdStatus: statusFilter },
+    ];
+  } else if (typeFilter || statusFilter) {
+    filters.metaAdStatus = typeFilter || statusFilter;
+  }
+
+  return taskType;
+};
 
 const populateTask = (query) =>
   query
@@ -371,13 +437,37 @@ const parseDateFilter = (value, label, endOfDay = false) => {
   return date;
 };
 
-const buildFilters = async (query) => {
-  const filters = {};
+const projectIdsFromQuery = (value) => {
+  if (value === undefined || value === null) return [];
+
+  return [value]
+    .flat()
+    .flatMap((item) => String(item).split(","))
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const applyProjectFilters = (filters, query) => {
+  if (query.projects !== undefined) {
+    const projectIds = [...new Set(projectIdsFromQuery(query.projects))];
+    if (projectIds.length < 1 || projectIds.length > 100) {
+      throw new ApiError(400, "projects must contain from 1 to 100 values");
+    }
+    projectIds.forEach((projectId) => assertObjectId(projectId, "project id"));
+    filters.project = { $in: projectIds };
+    return;
+  }
 
   if (query.project) {
     assertObjectId(query.project, "project id");
     filters.project = query.project;
   }
+};
+
+const buildFilters = async (query) => {
+  const filters = {};
+
+  applyProjectFilters(filters, query);
 
   if (query.statuses) {
     const requestedStatuses = [
@@ -424,6 +514,8 @@ const buildFilters = async (query) => {
     }
     filters.priority = query.priority;
   }
+
+  applyMetaAdFilters(filters, query);
 
   if (isTruthyQueryValue(query.overdue)) {
     if (!filters.status) {
@@ -577,8 +669,10 @@ const listTasksByProject = async (req, res) => {
   const visibilityQuery = await getTaskQueryForUser(req.user);
   const limit = parsePageSize(req.query.limit);
   const cursor = decodeCursor(req.query.cursor);
+  const filters = { project: req.params.projectId };
+  applyMetaAdFilters(filters, req.query);
   const query = combineQuery(
-    combineQuery(visibilityQuery, { project: req.params.projectId }),
+    combineQuery(visibilityQuery, filters),
     descendingCursorFilter(cursor),
   );
   const results = await populateTaskList(Task.find(query))
@@ -852,6 +946,58 @@ const updateTaskStatus = async (req, res) => {
   res.json({ task: await enrichTaskResponse(updatedTask) });
 };
 
+const updateTaskMetaAdStatus = async (req, res) => {
+  assertObjectId(req.params.id, "task id");
+
+  const metaAdStatus = String(req.body.metaAdStatus || "")
+    .trim()
+    .toLowerCase();
+  if (!validMetaAdStatuses.includes(metaAdStatus)) {
+    throw new ApiError(
+      400,
+      `Meta ad status must be one of: ${validMetaAdStatuses.join(", ")}`,
+    );
+  }
+
+  const task = await Task.findById(req.params.id).populate("project");
+
+  if (!task) {
+    throw new ApiError(404, "Task not found");
+  }
+
+  if (!canUpdateTaskStatus(req.user, task)) {
+    throw new ApiError(403, "You cannot update this task Meta ad status");
+  }
+
+  if (metaAdStatus !== "none") {
+    const statusPolicyKey = await resolveTaskStatusPolicyKey(task.status);
+    if (statusPolicyKey !== "published") {
+      throw new ApiError(
+        400,
+        "Meta ad status can only be set after the task is published",
+      );
+    }
+  }
+
+  const previousMetaAdStatus = task.metaAdStatus || "none";
+  task.metaAdStatus = metaAdStatus;
+  await task.save();
+
+  if (previousMetaAdStatus !== task.metaAdStatus) {
+    await createTaskActivity({
+      task,
+      actor: req.user,
+      type: "meta_ad_status_changed",
+      message: `${userLabel(req.user)} changed Meta ad status from ${readableValue(previousMetaAdStatus)} to ${readableValue(task.metaAdStatus)}`,
+      from: previousMetaAdStatus,
+      to: task.metaAdStatus,
+    });
+  }
+
+  const updatedTask = await populateTask(Task.findById(task._id));
+  res.json({ task: await enrichTaskResponse(updatedTask) });
+};
+
 const requestTaskCancellation = async (req, res) => {
   assertObjectId(req.params.id, "task id");
 
@@ -961,34 +1107,73 @@ const listCalendarTasks = async (req, res) => {
   const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
   const end = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
   const visibilityQuery = await getTaskQueryForUser(req.user);
-  const filters = {
-    startDate: { $gte: start, $lt: end },
-  };
+  const taskType = normalizedTaskType(req.query.taskType);
+  const filters = {};
+  const requestedMetaAdStatus =
+    taskType === "ad" ? req.query.metaAdStatus || req.query.status : null;
 
-  if (req.query.status) {
+  if (taskType !== "ad") {
+    filters.startDate = { $gte: start, $lt: end };
+  }
+
+  const typeFilter = taskTypeMetaAdFilter(taskType);
+  if (requestedMetaAdStatus) {
+    filters.metaAdStatus = metaAdStatusFilter(
+      normalizedMetaAdStatus(requestedMetaAdStatus),
+    );
+  } else if (typeFilter) {
+    filters.metaAdStatus = typeFilter;
+  }
+
+  if (taskType !== "ad" && req.query.status) {
     filters.status = await resolveTaskStatusKey(req.query.status);
   }
 
-  if (req.query.project) {
-    assertObjectId(req.query.project, "project id");
-    filters.project = req.query.project;
-  }
+  applyProjectFilters(filters, req.query);
 
   const tasks = await populateTask(
     Task.find(combineQuery(visibilityQuery, filters)),
   ).sort({ startDate: 1 });
 
   const enrichedTasks = await enrichTaskResponses(tasks);
+  let timelinesByTaskId = new Map();
+
+  if (taskType === "ad" && enrichedTasks.length > 0) {
+    const taskIds = enrichedTasks.map((task) => task.id || task._id);
+    const activities = await TaskActivity.find({
+      task: { $in: taskIds },
+      type: "meta_ad_status_changed",
+      createdAt: { $lt: end },
+    })
+      .sort({ createdAt: 1, _id: 1 })
+      .lean();
+
+    timelinesByTaskId = activities.reduce((result, activity) => {
+      const taskId = String(activity.task);
+      const timeline = result.get(taskId) || [];
+      timeline.push({
+        status: activity.to || "none",
+        previousStatus: activity.from || "none",
+        changedAt: activity.createdAt,
+      });
+      result.set(taskId, timeline);
+      return result;
+    }, new Map());
+  }
 
   res.json({
     month,
     year,
     project: req.query.project || null,
     status: req.query.status || null,
+    metaAdStatus: requestedMetaAdStatus || null,
+    taskType,
     tasks: enrichedTasks.map((task) => {
       const startDate = task.startDate ? new Date(task.startDate) : null;
+      const taskId = String(task.id || task._id);
       return {
         ...task,
+        metaAdTimeline: timelinesByTaskId.get(taskId) || [],
         dateKey:
           startDate && !Number.isNaN(startDate.getTime())
             ? startDate.toISOString().slice(0, 10)
@@ -1006,6 +1191,7 @@ module.exports = {
   listMyTasks,
   updateTask,
   updateTaskStatus,
+  updateTaskMetaAdStatus,
   requestTaskCancellation,
   deleteTask,
   listCalendarTasks,

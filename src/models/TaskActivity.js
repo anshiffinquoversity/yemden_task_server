@@ -19,6 +19,7 @@ const taskActivitySchema = new mongoose.Schema(
         'task_created',
         'task_updated',
         'status_changed',
+        'meta_ad_status_changed',
         'assignee_changed',
         'comment_added',
         'document_added',

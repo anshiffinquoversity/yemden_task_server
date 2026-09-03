@@ -34,6 +34,17 @@ const taskSchema = new mongoose.Schema(
       lowercase: true,
       default: "open",
     },
+    metaAdStatus: {
+      type: String,
+      enum: [
+        "none",
+        "ad_posted",
+        "ad_started",
+        "ad_paused",
+        "ad_stopped",
+      ],
+      default: "none",
+    },
     priority: {
       type: String,
       enum: ["low", "medium", "high"],
@@ -60,6 +71,7 @@ taskSchema.index({ createdAt: -1, _id: -1 });
 taskSchema.index({ project: 1, createdAt: -1, _id: -1 });
 taskSchema.index({ assignedTo: 1, createdAt: -1, _id: -1 });
 taskSchema.index({ status: 1, createdAt: -1, _id: -1 });
+taskSchema.index({ metaAdStatus: 1, createdAt: -1, _id: -1 });
 taskSchema.index({ startDate: 1 });
 taskSchema.index({ reminderAt: 1, reminderLeadSentAt: 1 });
 taskSchema.index({ reminderAt: 1, reminderSentAt: 1 });

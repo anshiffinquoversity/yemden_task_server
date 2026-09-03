@@ -197,6 +197,13 @@ GET    /api/tasks/calendar?month=7&year=2026
 GET /api/dashboard/summary
 ```
 
+Task lists accept either the existing single-project filter
+`project=PROJECT_ID` or a multi-project filter with comma-separated IDs:
+
+```text
+GET /api/tasks?projects=PROJECT_ID_1,PROJECT_ID_2
+```
+
 The built-in admin, manager, employee, and social-media-handler roles are
 created automatically the first time role-aware authentication runs. Existing
 users keep their current role key, so no one-off role migration is required.
