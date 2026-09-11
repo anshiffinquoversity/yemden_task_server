@@ -57,6 +57,14 @@ const {
   taskThumbnailUrlForFile,
 } = require("../utils/taskThumbnail");
 const { enrichTasksWithBanners } = require("../services/taskShareService");
+const {
+  automaticStartDateForEnd,
+  calendarEntriesForTask,
+  enrichTaskWithSchedule,
+  recordTaskDueDateChange,
+  startOfUtcDay,
+} = require("../utils/taskSchedule");
+const { syncTaskDutyCompletion } = require("../utils/taskDuty");
 
 const validPriorities = ["low", "medium", "high"];
 const validMetaAdStatuses = [
@@ -84,6 +92,31 @@ const parseReminderDate = (value) => {
   const date = parseOptionalDate(value);
   ensureFutureReminder(date);
   return date;
+};
+
+const parseRequiredTaskStartDate = (value) => {
+  const date = parseOptionalDate(value);
+  if (!date) {
+    throw new ApiError(400, "Task start date is required");
+  }
+  return date;
+};
+
+const taskStartDateForRequest = (user, value, dueDate) => {
+  const suppliedStartDate = parseOptionalDate(value);
+  if (suppliedStartDate) return suppliedStartDate;
+
+  if (isSocialMediaHandler(user) && dueDate) {
+    return automaticStartDateForEnd(dueDate);
+  }
+
+  return parseRequiredTaskStartDate(value);
+};
+
+const ensureValidTaskDateRange = (startDate, dueDate) => {
+  if (startDate && dueDate && startDate.getTime() > dueDate.getTime()) {
+    throw new ApiError(400, "Task start date cannot be after the end date");
+  }
 };
 
 const startOfToday = () => {
@@ -178,7 +211,8 @@ const populateTaskList = (query) =>
 
 const enrichTaskResponses = async (tasks) => {
   const tasksWithBanners = await enrichTasksWithBanners(tasks);
-  return enrichTasksWithStatusInfo(tasksWithBanners);
+  const tasksWithStatuses = await enrichTasksWithStatusInfo(tasksWithBanners);
+  return tasksWithStatuses.map((task) => enrichTaskWithSchedule(task));
 };
 
 const enrichTaskResponse = async (task) => {
@@ -561,10 +595,23 @@ const createTask = async (req, res) => {
     throw new ApiError(400, "Task title is required");
   }
 
+  const dueDate = parseOptionalDate(req.body.dueDate);
+  const startDate = taskStartDateForRequest(
+    req.user,
+    req.body.startDate,
+    dueDate,
+  );
+  ensureValidTaskDateRange(startDate, dueDate);
+
   const managedProject = await ensureProjectCanManageTasks(req.user, project);
 
+  const requestedAssignedTo =
+    isSocialMediaHandler(req.user) &&
+    normalizeAssignedUserIds(req.body.assignedTo).length === 0
+      ? [req.user._id]
+      : req.body.assignedTo;
   const assignedTo = await ensureAssignableUsers(
-    req.body.assignedTo,
+    requestedAssignedTo,
     managedProject,
     req.user,
   );
@@ -589,8 +636,10 @@ const createTask = async (req, res) => {
     status: statusKey,
     approvedAt: statusPolicyKey === "approved" ? new Date() : null,
     priority: priority || "medium",
-    startDate: parseOptionalDate(req.body.startDate),
-    dueDate: parseOptionalDate(req.body.dueDate),
+    startDate,
+    dueDate,
+    originalDueDate: dueDate,
+    assignedAt: assignedTo.length > 0 ? new Date() : null,
     reminderAt: parseReminderDate(req.body.reminderAt),
     reminderLeadSentAt: null,
     reminderSentAt: null,
@@ -800,10 +849,24 @@ const updateTask = async (req, res) => {
     task.priority = req.body.priority;
   }
 
-  if (req.body.startDate !== undefined)
-    task.startDate = parseOptionalDate(req.body.startDate);
-  if (req.body.dueDate !== undefined)
-    task.dueDate = parseOptionalDate(req.body.dueDate);
+  if (req.body.dueDate !== undefined) {
+    const nextDueDate = parseOptionalDate(req.body.dueDate);
+    recordTaskDueDateChange(task, nextDueDate, req.user._id);
+  }
+  if (req.body.startDate !== undefined) {
+    task.startDate = taskStartDateForRequest(
+      req.user,
+      req.body.startDate,
+      task.dueDate,
+    );
+  } else if (
+    isSocialMediaHandler(req.user) &&
+    req.body.dueDate !== undefined &&
+    task.dueDate
+  ) {
+    task.startDate = taskStartDateForRequest(req.user, null, task.dueDate);
+  }
+  ensureValidTaskDateRange(task.startDate, task.dueDate);
   if (req.body.reminderAt !== undefined) {
     const nextReminderAt = parseOptionalDate(req.body.reminderAt);
     if (!sameDateTime(previousReminderAt, nextReminderAt)) {
@@ -814,6 +877,26 @@ const updateTask = async (req, res) => {
     }
   }
 
+  const nextAssignedTo = assignedUserIdList(task.assignedTo);
+  const hasNewAssignee = nextAssignedTo.some(
+    (userId) => !previousAssignedTo.includes(userId),
+  );
+  if (hasNewAssignee && !task.startDate) {
+    throw new ApiError(
+      400,
+      "Task start date is required when assigning a new user",
+    );
+  }
+  if (hasNewAssignee) {
+    task.assignedAt = new Date();
+  } else if (nextAssignedTo.length === 0) {
+    task.assignedAt = null;
+  } else if (!task.assignedAt) {
+    task.assignedAt = task.createdAt || new Date();
+  }
+
+  syncTaskDutyCompletion(task, req.user, previousStatus !== task.status);
+
   await task.save();
   if (shouldDeletePreviousThumbnail) {
     await deleteTaskThumbnailFile(previousThumbnailUrl);
@@ -821,8 +904,6 @@ const updateTask = async (req, res) => {
 
   const activityJobs = [];
   const notificationJobs = [];
-  const nextAssignedTo = assignedUserIdList(task.assignedTo);
-
   if (!sameAssignedUsers(previousAssignedTo, nextAssignedTo)) {
     const [fromLabel, toLabel] = await Promise.all([
       labelForUserIds(previousAssignedTo),
@@ -920,6 +1001,7 @@ const updateTaskStatus = async (req, res) => {
     }
   }
   task.status = statusKey;
+  syncTaskDutyCompletion(task, req.user, previousStatus !== task.status);
   await task.save();
 
   if (previousStatus !== task.status) {
@@ -1109,12 +1191,9 @@ const listCalendarTasks = async (req, res) => {
   const visibilityQuery = await getTaskQueryForUser(req.user);
   const taskType = normalizedTaskType(req.query.taskType);
   const filters = {};
+  const includeAssignedDate = true;
   const requestedMetaAdStatus =
     taskType === "ad" ? req.query.metaAdStatus || req.query.status : null;
-
-  if (taskType !== "ad") {
-    filters.startDate = { $gte: start, $lt: end };
-  }
 
   const typeFilter = taskTypeMetaAdFilter(taskType);
   if (requestedMetaAdStatus) {
@@ -1129,10 +1208,58 @@ const listCalendarTasks = async (req, res) => {
     filters.status = await resolveTaskStatusKey(req.query.status);
   }
 
+  if (req.query.assignedTo) {
+    assertObjectId(req.query.assignedTo, "assigned user id");
+    filters.assignedTo = req.query.assignedTo;
+  }
+
   applyProjectFilters(filters, req.query);
 
+  let calendarDateFilter = {};
+  if (taskType !== "ad") {
+    const datesInMonth = (field) => ({
+      [field]: { $gte: start, $lt: end },
+    });
+    const dateFilters = [
+      datesInMonth("startDate"),
+      datesInMonth("dueDate"),
+      datesInMonth("originalDueDate"),
+    ];
+    if (includeAssignedDate) dateFilters.push(datesInMonth("assignedAt"));
+
+    const today = startOfUtcDay();
+    if (today >= start && today < end) {
+      dateFilters.push({
+        $and: [
+          {
+            status: {
+              $nin: [
+                ...excludedOverdueStatusKeys,
+                "completed",
+                "published",
+                "delivered",
+              ],
+            },
+          },
+          {
+            $or: [
+              { dueDate: { $lt: today } },
+              { startDate: { $lt: today } },
+              ...(includeAssignedDate
+                ? [{ assignedAt: { $lt: today } }]
+                : []),
+            ],
+          },
+        ],
+      });
+    }
+    calendarDateFilter = { $or: dateFilters };
+  }
+
   const tasks = await populateTask(
-    Task.find(combineQuery(visibilityQuery, filters)),
+    Task.find(
+      combineQuery(combineQuery(visibilityQuery, filters), calendarDateFilter),
+    ),
   ).sort({ startDate: 1 });
 
   const enrichedTasks = await enrichTaskResponses(tasks);
@@ -1165,20 +1292,24 @@ const listCalendarTasks = async (req, res) => {
     month,
     year,
     project: req.query.project || null,
+    assignedTo: req.query.assignedTo || null,
     status: req.query.status || null,
     metaAdStatus: requestedMetaAdStatus || null,
     taskType,
-    tasks: enrichedTasks.map((task) => {
-      const startDate = task.startDate ? new Date(task.startDate) : null;
+    tasks: enrichedTasks.flatMap((task) => {
       const taskId = String(task.id || task._id);
-      return {
+      const calendarEntries = calendarEntriesForTask(task, {
+        rangeStart: start,
+        rangeEnd: end,
+        includeAssignedDate,
+      });
+      if (taskType !== "ad" && calendarEntries.length === 0) return [];
+      return [{
         ...task,
         metaAdTimeline: timelinesByTaskId.get(taskId) || [],
-        dateKey:
-          startDate && !Number.isNaN(startDate.getTime())
-            ? startDate.toISOString().slice(0, 10)
-            : null,
-      };
+        calendarEntries,
+        dateKey: calendarEntries[0]?.dateKey || null,
+      }];
     }),
   });
 };

@@ -1,5 +1,24 @@
 const mongoose = require("mongoose");
 
+const dueDateHistorySchema = new mongoose.Schema(
+  {
+    dueDate: {
+      type: Date,
+      required: true,
+    },
+    changedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
 const taskSchema = new mongoose.Schema(
   {
     title: {
@@ -23,6 +42,12 @@ const taskSchema = new mongoose.Schema(
       required: true,
     },
     assignedTo: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    dutyCompletedBy: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
@@ -52,6 +77,12 @@ const taskSchema = new mongoose.Schema(
     },
     startDate: Date,
     dueDate: Date,
+    originalDueDate: Date,
+    dueDateHistory: {
+      type: [dueDateHistorySchema],
+      default: [],
+    },
+    assignedAt: Date,
     reminderAt: Date,
     approvedAt: Date,
     reminderLeadSentAt: Date,
@@ -66,6 +97,8 @@ const taskSchema = new mongoose.Schema(
 
 taskSchema.index({ status: 1, startDate: 1 });
 taskSchema.index({ status: 1, dueDate: 1 });
+taskSchema.index({ originalDueDate: 1 });
+taskSchema.index({ assignedAt: 1 });
 taskSchema.index({ assignedTo: 1 });
 taskSchema.index({ createdAt: -1, _id: -1 });
 taskSchema.index({ project: 1, createdAt: -1, _id: -1 });

@@ -22,6 +22,21 @@ const responseRecorder = () => {
   return response;
 };
 
+const findCondition = (value, predicate) => {
+  if (!value || typeof value !== "object") return null;
+  if (predicate(value)) return value;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findCondition(child, predicate);
+    if (found) return found;
+  }
+  return null;
+};
+
+const dateRangeCondition = (filter, field) =>
+  findCondition(filter, (value) =>
+    Boolean(value[field]?.$gte && value[field]?.$lt),
+  );
+
 test("calendar includes canceled tasks when no status filter is selected", async () => {
   const restores = [];
   let taskFilter;
@@ -59,12 +74,12 @@ test("calendar includes canceled tasks when no status filter is selected", async
       response,
     );
 
-    assert.deepEqual(taskFilter, {
-      startDate: {
+    for (const field of ["startDate", "assignedAt", "dueDate", "originalDueDate"]) {
+      assert.deepEqual(dateRangeCondition(taskFilter, field)?.[field], {
         $gte: new Date("2026-07-01T00:00:00.000Z"),
         $lt: new Date("2026-08-01T00:00:00.000Z"),
-      },
-    });
+      });
+    }
     assert.deepEqual(response.body.tasks, []);
   } finally {
     restores.reverse().forEach((restore) => restore());
@@ -109,25 +124,108 @@ test("calendar filters tasks by multiple projects", async () => {
       responseRecorder(),
     );
 
-    assert.deepEqual(taskFilter.project, { $in: projectIds });
+    const projectCondition = findCondition(
+      taskFilter,
+      (value) => value.project?.$in,
+    );
+    assert.deepEqual(projectCondition.project, { $in: projectIds });
+  } finally {
+    restores.reverse().forEach((restore) => restore());
+  }
+});
+
+test("calendar filters tasks by assigned employee", async () => {
+  const restores = [];
+  let taskFilter;
+  const employeeId = "507f1f77bcf86cd799439011";
+
+  stubMethod(TaskStatus, "updateOne", async () => ({}), restores);
+  stubMethod(TaskStatus, "find", () => ({ sort: async () => [] }), restores);
+  stubMethod(
+    Task,
+    "find",
+    (filter) => {
+      taskFilter = filter;
+      const query = {
+        select: () => query,
+        populate: () => query,
+        sort: async () => [],
+      };
+      return query;
+    },
+    restores,
+  );
+
+  try {
+    const response = responseRecorder();
+    await listCalendarTasks(
+      {
+        query: { month: "9", year: "2026", assignedTo: employeeId },
+        user: { role: "admin" },
+      },
+      response,
+    );
+
+    assert.ok(
+      findCondition(taskFilter, (value) => value.assignedTo === employeeId),
+    );
+    assert.equal(response.body.assignedTo, employeeId);
+  } finally {
+    restores.reverse().forEach((restore) => restore());
+  }
+});
+
+test("employee calendar shows assigned tasks on their start date", async () => {
+  const restores = [];
+  let taskFilter;
+  const employeeId = "507f1f77bcf86cd799439011";
+
+  stubMethod(TaskStatus, "updateOne", async () => ({}), restores);
+  stubMethod(TaskStatus, "find", () => ({ sort: async () => [] }), restores);
+  stubMethod(
+    Task,
+    "find",
+    (filter) => {
+      taskFilter = filter;
+      const query = {
+        select: () => query,
+        populate: () => query,
+        sort: async () => [],
+      };
+      return query;
+    },
+    restores,
+  );
+
+  try {
+    await listCalendarTasks(
+      {
+        query: { month: "9", year: "2026" },
+        user: {
+          _id: employeeId,
+          role: "employee",
+          priorityAccess: "medium",
+        },
+      },
+      responseRecorder(),
+    );
+
+    assert.ok(
+      findCondition(taskFilter, (value) => value.assignedTo === employeeId),
+    );
+    assert.deepEqual(dateRangeCondition(taskFilter, "assignedAt")?.assignedAt, {
+      $gte: new Date("2026-09-01T00:00:00.000Z"),
+      $lt: new Date("2026-10-01T00:00:00.000Z"),
+    });
   } finally {
     restores.reverse().forEach((restore) => restore());
   }
 });
 
 test("calendar separates normal tasks from ad tasks", async () => {
-  for (const [taskType, expectedFilter] of [
-    [
-      "normal",
-      {
-        startDate: {
-          $gte: new Date("2026-07-01T00:00:00.000Z"),
-          $lt: new Date("2026-08-01T00:00:00.000Z"),
-        },
-        metaAdStatus: { $in: ["none", null] },
-      },
-    ],
-    ["ad", { metaAdStatus: { $nin: ["none", null] } }],
+  for (const [taskType, expectedMetaAdStatus] of [
+    ["normal", { $in: ["none", null] }],
+    ["ad", { $nin: ["none", null] }],
   ]) {
     const restores = [];
     let taskFilter;
@@ -156,7 +254,18 @@ test("calendar separates normal tasks from ad tasks", async () => {
         },
         responseRecorder(),
       );
-      assert.deepEqual(taskFilter, expectedFilter);
+      const metaCondition = findCondition(
+        taskFilter,
+        (value) => value.metaAdStatus,
+      );
+      assert.deepEqual(metaCondition.metaAdStatus, expectedMetaAdStatus);
+      if (taskType === "normal") {
+        assert.ok(dateRangeCondition(taskFilter, "startDate"));
+        assert.ok(dateRangeCondition(taskFilter, "assignedAt"));
+        assert.ok(dateRangeCondition(taskFilter, "dueDate"));
+      } else {
+        assert.equal(dateRangeCondition(taskFilter, "startDate"), null);
+      }
     } finally {
       restores.reverse().forEach((restore) => restore());
     }

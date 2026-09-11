@@ -3,6 +3,7 @@ const path = require('path');
 
 const Project = require('../models/Project');
 const Task = require('../models/Task');
+const TaskActivity = require('../models/TaskActivity');
 const TaskComment = require('../models/TaskComment');
 const TaskDocument = require('../models/TaskDocument');
 const User = require('../models/User');
@@ -232,19 +233,16 @@ const listPublishedProjectAssets = async (req, res) => {
       status: { $in: ['published', 'delivered'] },
     }),
   )
-    .select('_id title')
+    .select('_id title metaAdStatus startDate dueDate')
     .lean();
   const taskIds = tasks.map((task) => task._id);
-  const taskTitles = new Map(
-    tasks.map((task) => [String(task._id), String(task.title || '').trim()]),
-  );
 
   if (taskIds.length === 0) {
     res.json({ project, assets: [] });
     return;
   }
 
-  const [documents, comments] = await Promise.all([
+  const [documents, comments, adActivities] = await Promise.all([
     TaskDocument.find({
       task: { $in: taskIds },
       isPublished: true,
@@ -264,12 +262,46 @@ const listPublishedProjectAssets = async (req, res) => {
         { publicationLinks: { $elemMatch: { isPublished: true } } },
       ],
     }).sort({ createdAt: -1, _id: -1 }),
+    TaskActivity.find({
+      task: { $in: taskIds },
+      type: 'meta_ad_status_changed',
+    })
+      .sort({ createdAt: 1, _id: 1 })
+      .lean(),
   ]);
+
+  const adTimelinesByTaskId = adActivities.reduce((result, activity) => {
+    const taskId = String(activity.task);
+    const timeline = result.get(taskId) || [];
+    timeline.push({
+      status: activity.to || 'none',
+      previousStatus: activity.from || 'none',
+      changedAt: activity.createdAt,
+    });
+    result.set(taskId, timeline);
+    return result;
+  }, new Map());
+  const taskMetadata = new Map(
+    tasks.map((task) => {
+      const taskId = String(task._id);
+      return [
+        taskId,
+        {
+          taskId,
+          taskTitle: String(task.title || '').trim(),
+          metaAdStatus: task.metaAdStatus || 'none',
+          taskStartDate: task.startDate || null,
+          taskEndDate: task.dueDate || null,
+          metaAdTimeline: adTimelinesByTaskId.get(taskId) || [],
+        },
+      ];
+    }),
+  );
 
   const assets = documents.map((document) => ({
     id: `document:${document._id}`,
     title: document.title,
-    taskTitle: taskTitles.get(String(document.task)) || '',
+    ...taskMetadata.get(String(document.task)),
     url: document.url,
     type: document.type,
     mimeType: '',
@@ -284,7 +316,7 @@ const listPublishedProjectAssets = async (req, res) => {
       assets.push({
         id: `comment:${comment._id}:${attachment._id}`,
         title: attachment.title || attachment.url,
-        taskTitle: taskTitles.get(String(comment.task)) || '',
+        ...taskMetadata.get(String(comment.task)),
         url: attachment.url,
         type: attachment.type,
         mimeType: attachment.mimeType || '',
@@ -296,7 +328,7 @@ const listPublishedProjectAssets = async (req, res) => {
       assets.push({
         id: commentLinkAssetId(comment, link),
         title: link.title || link.url,
-        taskTitle: taskTitles.get(String(comment.task)) || '',
+        ...taskMetadata.get(String(comment.task)),
         url: link.url,
         type: 'link',
         mimeType: '',

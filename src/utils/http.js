@@ -15,8 +15,8 @@ const assertObjectId = (value, label = 'id') => {
 
 const sameId = (left, right) => {
   if (!left || !right) return false;
-  const leftId = left._id || left;
-  const rightId = right._id || right;
+  const leftId = left._id || left.id || left;
+  const rightId = right._id || right.id || right;
   return leftId.toString() === rightId.toString();
 };
 
@@ -44,4 +44,3 @@ module.exports = {
   parseOptionalDate,
   sendCreated,
 };
-

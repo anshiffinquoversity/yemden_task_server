@@ -48,7 +48,7 @@ const defaultRoles = [
     key: 'social_media_handler',
     priority: 400,
     taskScope: 'assigned',
-    permissions: ['changeTaskStatus'],
+    permissions: ['manageTasks', 'changeTaskStatus'],
     statusVisibility: { mode: 'all', statusKeys: [] },
     statusChange: {
       mode: 'selected',
@@ -78,7 +78,9 @@ const ensureDefaultRoles = async () => {
       defaultRoles.map((role) =>
         Role.updateOne(
           { key: role.key },
-          { $setOnInsert: role },
+          role.key === 'social_media_handler'
+            ? { $set: role }
+            : { $setOnInsert: role },
           { upsert: true },
         ),
       ),
@@ -160,7 +162,7 @@ const hasPermission = (user, permission) => {
         'changeTaskStatus',
       ],
       employee: ['changeTaskStatus'],
-      social_media_handler: ['changeTaskStatus'],
+      social_media_handler: ['manageTasks', 'changeTaskStatus'],
     };
     return (legacyPermissions[user?.role] || []).includes(permission);
   }
