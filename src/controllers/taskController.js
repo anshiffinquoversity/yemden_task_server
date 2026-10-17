@@ -34,6 +34,8 @@ const {
   resolveTaskStatusKey,
   resolveTaskStatusPolicyKey,
   getTaskStatusKeysByCategory,
+  listTaskStatuses,
+  taskStatusPolicyKey,
   canUserChangeTaskStatus,
   enrichTasksWithStatusInfo,
 } = require("../utils/taskStatusCatalog");
@@ -62,11 +64,15 @@ const {
   calendarEntriesForTask,
   enrichTaskWithSchedule,
   recordTaskDueDateChange,
-  startOfUtcDay,
 } = require("../utils/taskSchedule");
 const { syncTaskDutyCompletion } = require("../utils/taskDuty");
 
 const validPriorities = ["low", "medium", "high"];
+const validTaskCategories = [
+  "social_media_ads",
+  "normal_ads",
+  "posters",
+];
 const validMetaAdStatuses = [
   "none",
   "ad_posted",
@@ -80,6 +86,16 @@ const excludedOverdueStatusKeys = new Set([
   "cancelled",
   "deleted",
 ]);
+
+const ensureValidTaskCategory = (value) => {
+  if (!validTaskCategories.includes(value)) {
+    throw new ApiError(
+      400,
+      `Category must be one of: ${validTaskCategories.join(", ")}`,
+    );
+  }
+  return value;
+};
 
 const ensureFutureReminder = (date) => {
   if (!date) return;
@@ -498,6 +514,15 @@ const applyProjectFilters = (filters, query) => {
   }
 };
 
+const getApprovedTaskStatusKeys = async () => {
+  const statuses = await listTaskStatuses();
+  return statuses
+    .filter((status) =>
+      ["approved", "published"].includes(taskStatusPolicyKey(status)),
+    )
+    .map((status) => status.key);
+};
+
 const buildFilters = async (query) => {
   const filters = {};
 
@@ -537,6 +562,16 @@ const buildFilters = async (query) => {
   if (query.assignedTo) {
     assertObjectId(query.assignedTo, "assigned user id");
     filters.assignedTo = query.assignedTo;
+  }
+
+  if (isTruthyQueryValue(query.approved)) {
+    const approvedStatusKeys = await getApprovedTaskStatusKeys();
+    filters.$or = [
+      { approvedAt: { $ne: null } },
+      ...(approvedStatusKeys.length > 0
+        ? [{ status: { $in: approvedStatusKeys } }]
+        : []),
+    ];
   }
 
   if (query.priority) {
@@ -626,6 +661,9 @@ const createTask = async (req, res) => {
       "Create the task first, add attachments, and publish at least one attachment before publishing the task",
     );
   }
+  const category = ensureValidTaskCategory(
+    req.body.category || validTaskCategories[0],
+  );
 
   const task = await Task.create({
     title: String(title).trim(),
@@ -636,10 +674,14 @@ const createTask = async (req, res) => {
     status: statusKey,
     approvedAt: statusPolicyKey === "approved" ? new Date() : null,
     priority: priority || "medium",
+    category,
     startDate,
     dueDate,
     originalDueDate: dueDate,
-    assignedAt: assignedTo.length > 0 ? new Date() : null,
+    assignedAt:
+      assignedTo.length > 0
+        ? parseOptionalDate(req.body.assignedAt) || new Date()
+        : null,
     reminderAt: parseReminderDate(req.body.reminderAt),
     reminderLeadSentAt: null,
     reminderSentAt: null,
@@ -849,6 +891,10 @@ const updateTask = async (req, res) => {
     task.priority = req.body.priority;
   }
 
+  if (req.body.category !== undefined) {
+    task.category = ensureValidTaskCategory(req.body.category);
+  }
+
   if (req.body.dueDate !== undefined) {
     const nextDueDate = parseOptionalDate(req.body.dueDate);
     recordTaskDueDateChange(task, nextDueDate, req.user._id);
@@ -888,11 +934,11 @@ const updateTask = async (req, res) => {
     );
   }
   if (hasNewAssignee) {
-    task.assignedAt = new Date();
+    task.assignedAt = parseOptionalDate(req.body.assignedAt) || new Date();
   } else if (nextAssignedTo.length === 0) {
     task.assignedAt = null;
-  } else if (!task.assignedAt) {
-    task.assignedAt = task.createdAt || new Date();
+  } else if (req.body.assignedAt !== undefined) {
+    task.assignedAt = parseOptionalDate(req.body.assignedAt);
   }
 
   syncTaskDutyCompletion(task, req.user, previousStatus !== task.status);
@@ -1189,9 +1235,15 @@ const listCalendarTasks = async (req, res) => {
   const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
   const end = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
   const visibilityQuery = await getTaskQueryForUser(req.user);
+  // Calendar entries can reveal other assignees' schedules even when the
+  // surrounding project is visible. Employee-like roles must always be
+  // restricted to work assigned directly to the signed-in user, regardless
+  // of a broader task scope saved on their role definition.
+  const calendarVisibilityQuery = isEmployee(req.user)
+    ? combineQuery(visibilityQuery, { assignedTo: req.user._id })
+    : visibilityQuery;
   const taskType = normalizedTaskType(req.query.taskType);
   const filters = {};
-  const includeAssignedDate = true;
   const requestedMetaAdStatus =
     taskType === "ad" ? req.query.metaAdStatus || req.query.status : null;
 
@@ -1220,47 +1272,34 @@ const listCalendarTasks = async (req, res) => {
     const datesInMonth = (field) => ({
       [field]: { $gte: start, $lt: end },
     });
-    const dateFilters = [
-      datesInMonth("startDate"),
-      datesInMonth("dueDate"),
-      datesInMonth("originalDueDate"),
-    ];
-    if (includeAssignedDate) dateFilters.push(datesInMonth("assignedAt"));
-
-    const today = startOfUtcDay();
-    if (today >= start && today < end) {
-      dateFilters.push({
-        $and: [
-          {
-            status: {
-              $nin: [
-                ...excludedOverdueStatusKeys,
-                "completed",
-                "published",
-                "delivered",
-              ],
-            },
-          },
-          {
-            $or: [
-              { dueDate: { $lt: today } },
-              { startDate: { $lt: today } },
-              ...(includeAssignedDate
-                ? [{ assignedAt: { $lt: today } }]
-                : []),
-            ],
-          },
-        ],
-      });
-    }
-    calendarDateFilter = { $or: dateFilters };
+    calendarDateFilter = {
+      $or: [
+        datesInMonth("assignedAt"),
+        {
+          $and: [
+            { assignedAt: null },
+            datesInMonth("dueDate"),
+          ],
+        },
+        {
+          $and: [
+            { assignedAt: null },
+            { dueDate: null },
+            datesInMonth("startDate"),
+          ],
+        },
+      ],
+    };
   }
 
   const tasks = await populateTask(
     Task.find(
-      combineQuery(combineQuery(visibilityQuery, filters), calendarDateFilter),
+      combineQuery(
+        combineQuery(calendarVisibilityQuery, filters),
+        calendarDateFilter,
+      ),
     ),
-  ).sort({ startDate: 1 });
+  ).sort({ assignedAt: 1, dueDate: 1, startDate: 1 });
 
   const enrichedTasks = await enrichTaskResponses(tasks);
   let timelinesByTaskId = new Map();
@@ -1301,7 +1340,6 @@ const listCalendarTasks = async (req, res) => {
       const calendarEntries = calendarEntriesForTask(task, {
         rangeStart: start,
         rangeEnd: end,
-        includeAssignedDate,
       });
       if (taskType !== "ad" && calendarEntries.length === 0) return [];
       return [{

@@ -75,9 +75,9 @@ const taskScheduleState = (task, now = new Date()) => {
 const enrichTaskWithSchedule = (task, now = new Date()) => {
   const data = typeof task?.toJSON === "function" ? task.toJSON() : task;
   const originalDueDate = cleanDate(data?.originalDueDate) || cleanDate(data?.dueDate);
-  const assignedAt =
-    cleanDate(data?.assignedAt) ||
-    ((data?.assignedTo || []).length > 0 ? cleanDate(data?.createdAt) : null);
+  // Only a recorded assignment date should override the end date in Calendar.
+  // Do not manufacture one from createdAt for older assigned tasks.
+  const assignedAt = cleanDate(data?.assignedAt);
   const scheduleData = { ...data, assignedAt };
   return {
     ...scheduleData,
@@ -91,60 +91,26 @@ const calendarEntriesForTask = (
   {
     rangeStart,
     rangeEnd,
-    now = new Date(),
-    includeAssignedDate = false,
   },
 ) => {
   const start = cleanDate(rangeStart);
   const end = cleanDate(rangeEnd);
-  const entries = [];
-  const originalDueDate = cleanDate(task?.originalDueDate);
-  const currentDueDate = cleanDate(task?.dueDate);
-  const today = startOfUtcDay(now);
-  const missedOriginalDueDate = Boolean(
-    originalDueDate &&
-      !isFinishedTask(task) &&
-      startOfUtcDay(originalDueDate) < today,
-  );
+  const assignedDate = cleanDate(task?.assignedAt);
+  const currentEndDate = cleanDate(task?.dueDate);
+  // Older Worqi tasks stored their intended end date in startDate. Keep that
+  // date as an end-date fallback only when the task has no real due date.
+  const legacyEndDate = cleanDate(task?.startDate);
+  const value = assignedDate || currentEndDate || legacyEndDate;
 
-  const add = (date, type, label) => {
-    const value = cleanDate(date);
-    if (!value) return;
-    if (start && value < start) return;
-    if (end && value >= end) return;
-    const key = dateKey(value);
-    if (entries.some((entry) => entry.dateKey === key && entry.type === type)) {
-      return;
-    }
-    entries.push({ date: value, dateKey: key, type, label });
-  };
+  if (!value || (start && value < start) || (end && value >= end)) return [];
 
-  add(task?.startDate, "start", "Start date");
-  if (includeAssignedDate) {
-    add(task?.assignedAt || task?.createdAt, "assigned", "Assigned date");
-  }
-
-  if (
-    originalDueDate &&
-    currentDueDate &&
-    !sameDate(originalDueDate, currentDueDate) &&
-    missedOriginalDueDate
-  ) {
-    add(originalDueDate, "original_end", "Original end date");
-    add(currentDueDate, "updated_end", "Updated end date");
-  } else {
-    add(currentDueDate || originalDueDate, "end", "End date");
-  }
-
-  const schedule = taskScheduleState(task, now);
-  if (schedule.carriedForwardDate) {
-    add(schedule.carriedForwardDate, "carry_forward", "Pending carry-forward");
-  }
-
-  return entries.sort((left, right) => {
-    const dateComparison = left.date.getTime() - right.date.getTime();
-    return dateComparison || left.type.localeCompare(right.type);
-  });
+  const usesAssignedDate = Boolean(assignedDate);
+  return [{
+    date: value,
+    dateKey: dateKey(value),
+    type: usesAssignedDate ? "assigned" : "end",
+    label: usesAssignedDate ? "Assigned date" : "End date",
+  }];
 };
 
 const taskOverlapsDateRange = (task, fromDate, toDate) => {

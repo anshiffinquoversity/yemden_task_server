@@ -61,6 +61,18 @@ const markNotificationRead = async (req, res) => {
   res.json({ notification: await populateNotification(Notification.findById(notification._id)) });
 };
 
+const markAllNotificationsRead = async (req, res) => {
+  const result = await Notification.updateMany(
+    { recipient: req.user._id, readAt: null },
+    { $set: { readAt: new Date() } }
+  );
+
+  res.json({
+    message: 'All notifications marked as read',
+    updatedCount: result.modifiedCount,
+  });
+};
+
 const registerPushToken = async (req, res) => {
   const token = String(req.body.token || '').trim();
   const platform = String(req.body.platform || 'web').trim().toLowerCase();
@@ -118,6 +130,7 @@ const deletePushToken = async (req, res) => {
 module.exports = {
   listNotifications,
   markNotificationRead,
+  markAllNotificationsRead,
   registerPushToken,
   deletePushToken,
 };

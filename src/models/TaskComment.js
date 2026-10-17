@@ -90,6 +90,11 @@ const taskCommentSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    replyTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaskComment',
+      default: null,
+    },
     mentions: [
       {
         type: mongoose.Schema.Types.ObjectId,

@@ -74,12 +74,13 @@ test("calendar includes canceled tasks when no status filter is selected", async
       response,
     );
 
-    for (const field of ["startDate", "assignedAt", "dueDate", "originalDueDate"]) {
+    for (const field of ["assignedAt", "dueDate", "startDate"]) {
       assert.deepEqual(dateRangeCondition(taskFilter, field)?.[field], {
         $gte: new Date("2026-07-01T00:00:00.000Z"),
         $lt: new Date("2026-08-01T00:00:00.000Z"),
       });
     }
+    assert.equal(dateRangeCondition(taskFilter, "originalDueDate"), null);
     assert.deepEqual(response.body.tasks, []);
   } finally {
     restores.reverse().forEach((restore) => restore());
@@ -175,7 +176,7 @@ test("calendar filters tasks by assigned employee", async () => {
   }
 });
 
-test("employee calendar shows assigned tasks on their start date", async () => {
+test("employee calendar queries the recorded assignment date", async () => {
   const restores = [];
   let taskFilter;
   const employeeId = "507f1f77bcf86cd799439011";
@@ -219,6 +220,58 @@ test("employee calendar shows assigned tasks on their start date", async () => {
     });
   } finally {
     restores.reverse().forEach((restore) => restore());
+  }
+});
+
+test("employee-like calendars stay assigned-only with a broader saved role scope", async () => {
+  for (const role of ["employee", "social_media_handler"]) {
+    const restores = [];
+    let taskFilter;
+    const userId =
+      role === "employee"
+        ? "507f1f77bcf86cd799439011"
+        : "507f191e810c19729de860ea";
+
+    stubMethod(TaskStatus, "updateOne", async () => ({}), restores);
+    stubMethod(TaskStatus, "find", () => ({ sort: async () => [] }), restores);
+    stubMethod(
+      Task,
+      "find",
+      (filter) => {
+        taskFilter = filter;
+        const query = {
+          select: () => query,
+          populate: () => query,
+          sort: async () => [],
+        };
+        return query;
+      },
+      restores,
+    );
+
+    try {
+      await listCalendarTasks(
+        {
+          query: { month: "9", year: "2026" },
+          user: {
+            _id: userId,
+            role,
+            roleDefinition: {
+              taskScope: "all",
+              statusVisibility: { mode: "all", statusKeys: [] },
+            },
+          },
+        },
+        responseRecorder(),
+      );
+
+      assert.ok(
+        findCondition(taskFilter, (value) => value.assignedTo === userId),
+        `${role} calendar must filter by the signed-in user`,
+      );
+    } finally {
+      restores.reverse().forEach((restore) => restore());
+    }
   }
 });
 

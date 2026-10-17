@@ -7,6 +7,7 @@ const TaskActivity = require("../src/models/TaskActivity");
 const TaskStatus = require("../src/models/TaskStatus");
 const User = require("../src/models/User");
 const {
+  dashboardTaskCounts,
   getDashboardSummary,
 } = require("../src/controllers/dashboardController");
 
@@ -32,6 +33,55 @@ const responseRecorder = () => {
   };
   return response;
 };
+
+test("dashboard approval totals include approved and published tasks", () => {
+  const counts = dashboardTaskCounts([
+    {
+      status: "open",
+      statusCategory: "open",
+      statusInfo: { key: "open", name: "Open", category: "open" },
+      isPending: true,
+      isOverdue: false,
+    },
+    {
+      status: "client_signoff",
+      statusCategory: "open",
+      statusInfo: {
+        key: "client_signoff",
+        name: "Approved",
+        category: "open",
+      },
+      isPending: true,
+      isOverdue: false,
+    },
+    {
+      status: "published",
+      statusCategory: "open",
+      statusInfo: {
+        key: "published",
+        name: "Published",
+        category: "open",
+      },
+      isPending: true,
+      isOverdue: false,
+    },
+    {
+      status: "completed",
+      statusCategory: "closed",
+      statusInfo: {
+        key: "completed",
+        name: "Completed",
+        category: "closed",
+      },
+      isPending: false,
+      isOverdue: false,
+    },
+  ]);
+
+  assert.equal(counts.approvedTasks, 2);
+  assert.equal(counts.pendingTasks, 1);
+  assert.equal(counts.completedTasks, 1);
+});
 
 test("only admins can request another user's dashboard details", async () => {
   await assert.rejects(

@@ -26,12 +26,17 @@ const responseRecorder = () => {
   return response;
 };
 
-const captureTaskFilter = async (query) => {
+const captureTaskFilter = async (query, { statuses = [] } = {}) => {
   const restores = [];
   let taskFilter;
 
   stubMethod(TaskStatus, "updateOne", async () => ({}), restores);
-  stubMethod(TaskStatus, "find", () => ({ sort: async () => [] }), restores);
+  stubMethod(
+    TaskStatus,
+    "find",
+    () => ({ sort: async () => statuses }),
+    restores,
+  );
   stubMethod(TaskComment, "aggregate", async () => [], restores);
   stubMethod(
     Task,
@@ -71,6 +76,34 @@ test("task list keeps the existing single-project filter", async () => {
   const filter = await captureTaskFilter({ project: projectOne });
 
   assert.deepEqual(filter, { project: projectOne });
+});
+
+test("approved task list includes recorded, approved, and published tasks", async () => {
+  const filter = await captureTaskFilter(
+    { approved: "true" },
+    {
+      statuses: [
+        {
+          key: "client_signoff",
+          name: "Approved",
+          category: "open",
+        },
+        {
+          key: "live",
+          name: "Published",
+          category: "open",
+        },
+        { key: "review", name: "Review", category: "open" },
+      ],
+    },
+  );
+
+  assert.deepEqual(filter, {
+    $or: [
+      { approvedAt: { $ne: null } },
+      { status: { $in: ["client_signoff", "live"] } },
+    ],
+  });
 });
 
 test("task list rejects an invalid project in a multi-project filter", async () => {

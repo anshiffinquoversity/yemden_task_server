@@ -46,7 +46,15 @@ const populateTaskForCollaboration = (query) =>
 const populateComment = (query) =>
   query
     .populate('author', 'name email role status')
-    .populate('mentions', 'name email role status');
+    .populate('mentions', 'name email role status')
+    .populate({
+      path: 'replyTo',
+      select: 'body author attachments createdAt',
+      populate: {
+        path: 'author',
+        select: 'name email role status',
+      },
+    });
 
 const populateDocument = (query) =>
   query.populate('uploadedBy', 'name email role status');
@@ -293,6 +301,7 @@ const listTaskCollaboration = async (req, res) => {
 const createTaskComment = async (req, res) => {
   const task = await findVisibleTask(req.user, req.params.id);
   const body = String(req.body.body || '').trim();
+  const replyToId = String(req.body.replyToId || '').trim();
   const mentionIds = normalizeMentionIds(req.body.mentionIds);
   const attachments = [
     ...normalizeAttachments(req.body.attachments),
@@ -307,6 +316,18 @@ const createTaskComment = async (req, res) => {
     throw new ApiError(400, 'Comment text or an attachment is required');
   }
 
+  let replyTo = null;
+  if (replyToId) {
+    assertObjectId(replyToId, 'reply comment id');
+    replyTo = await TaskComment.findOne({
+      _id: replyToId,
+      task: task._id,
+    }).select('_id');
+    if (!replyTo) {
+      throw new ApiError(404, 'Original comment not found');
+    }
+  }
+
   const mentionedUsers = await resolveMentionedUsers(
     body,
     task,
@@ -317,6 +338,7 @@ const createTaskComment = async (req, res) => {
     task: task._id,
     author: req.user._id,
     body,
+    replyTo: replyTo?._id || null,
     mentions: mentionedUsers.map((user) => user._id),
     attachments,
   });

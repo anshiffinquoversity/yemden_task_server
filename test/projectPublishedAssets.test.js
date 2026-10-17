@@ -60,6 +60,7 @@ test('published assets include ad-task dates, timeline, and task identity', asyn
           {
             _id: taskId,
             title: 'Campaign launch',
+            category: 'posters',
             metaAdStatus: 'ad_stopped',
             startDate: taskStartDate,
             dueDate: taskEndDate,
@@ -135,6 +136,7 @@ test('published assets include ad-task dates, timeline, and task identity', asyn
       title: 'Campaign creative',
       taskId,
       taskTitle: 'Campaign launch',
+      taskCategory: 'posters',
       metaAdStatus: 'ad_stopped',
       taskStartDate,
       taskEndDate,

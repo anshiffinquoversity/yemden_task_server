@@ -75,6 +75,11 @@ const taskSchema = new mongoose.Schema(
       enum: ["low", "medium", "high"],
       default: "medium",
     },
+    category: {
+      type: String,
+      enum: ["social_media_ads", "normal_ads", "posters"],
+      default: "social_media_ads",
+    },
     startDate: Date,
     dueDate: Date,
     originalDueDate: Date,

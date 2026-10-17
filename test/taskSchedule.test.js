@@ -40,38 +40,48 @@ test("changing an end date preserves the original and records the change", () =>
   ]);
 });
 
-test("unfinished rescheduled tasks keep original and updated end dates and carry forward", () => {
-  const now = new Date("2026-09-10T12:00:00.000Z");
-  const task = enrichTaskWithSchedule(
-    {
-      id: "task-1",
-      status: "open",
-      statusCategory: "open",
-      startDate: new Date("2026-08-01T00:00:00.000Z"),
-      assignedAt: new Date("2026-08-01T09:00:00.000Z"),
-      originalDueDate: new Date("2026-09-08T00:00:00.000Z"),
-      dueDate: new Date("2026-09-09T00:00:00.000Z"),
-      assignedTo: ["employee-1"],
-    },
-    now,
-  );
-  const entries = calendarEntriesForTask(task, {
+test("calendar uses the assigned date instead of start or end dates", () => {
+  const entries = calendarEntriesForTask({
+    startDate: new Date("2026-09-02T00:00:00.000Z"),
+    dueDate: new Date("2026-09-20T00:00:00.000Z"),
+    assignedAt: new Date("2026-09-08T10:30:00.000Z"),
+  }, {
     rangeStart: new Date("2026-09-01T00:00:00.000Z"),
     rangeEnd: new Date("2026-10-01T00:00:00.000Z"),
-    includeAssignedDate: true,
-    now,
   });
 
-  assert.equal(task.isPending, true);
-  assert.equal(task.isOverdue, true);
-  assert.equal(task.carriedForwardDate.toISOString(), "2026-09-10T00:00:00.000Z");
   assert.deepEqual(
     entries.map((entry) => [entry.dateKey, entry.type]),
-    [
-      ["2026-09-08", "original_end"],
-      ["2026-09-09", "updated_end"],
-      ["2026-09-10", "carry_forward"],
-    ],
+    [["2026-09-08", "assigned"]],
+  );
+});
+
+test("calendar uses the end date by default and never emits the start date", () => {
+  const entries = calendarEntriesForTask({
+    startDate: new Date("2026-09-02T00:00:00.000Z"),
+    dueDate: new Date("2026-09-20T00:00:00.000Z"),
+  }, {
+    rangeStart: new Date("2026-09-01T00:00:00.000Z"),
+    rangeEnd: new Date("2026-10-01T00:00:00.000Z"),
+  });
+
+  assert.deepEqual(
+    entries.map((entry) => [entry.dateKey, entry.type, entry.label]),
+    [["2026-09-20", "end", "End date"]],
+  );
+});
+
+test("calendar treats a legacy start-only date as its end date", () => {
+  const entries = calendarEntriesForTask({
+    startDate: new Date("2026-09-12T00:00:00.000Z"),
+  }, {
+    rangeStart: new Date("2026-09-01T00:00:00.000Z"),
+    rangeEnd: new Date("2026-10-01T00:00:00.000Z"),
+  });
+
+  assert.deepEqual(
+    entries.map((entry) => [entry.dateKey, entry.type, entry.label]),
+    [["2026-09-12", "end", "End date"]],
   );
 });
 
@@ -99,8 +109,6 @@ test("assignment date is exposed as an employee calendar event", () => {
     {
       rangeStart: new Date("2026-09-01T00:00:00.000Z"),
       rangeEnd: new Date("2026-10-01T00:00:00.000Z"),
-      includeAssignedDate: true,
-      now: new Date("2026-09-01T00:00:00.000Z"),
     },
   );
 

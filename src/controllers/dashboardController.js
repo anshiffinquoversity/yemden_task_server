@@ -9,7 +9,10 @@ const {
 } = require("../utils/accessControl");
 const { ApiError, assertObjectId, sameId } = require("../utils/http");
 const { taskScopeFor } = require("../utils/roleCatalog");
-const { enrichTasksWithStatusInfo } = require("../utils/taskStatusCatalog");
+const {
+  enrichTasksWithStatusInfo,
+  taskStatusPolicyKey,
+} = require("../utils/taskStatusCatalog");
 const {
   enrichTaskWithSchedule,
   taskOverlapsDateRange,
@@ -27,6 +30,26 @@ const parseDateFilter = (value, label) => {
 
 const taskId = (task) => String(task?.id || task?._id || "");
 const userId = (user) => String(user?.id || user?._id || user || "");
+
+const hasRecordedApproval = (task) =>
+  Boolean(task?.approvedAt) ||
+  ["approved", "published"].includes(
+    taskStatusPolicyKey(task?.statusInfo || task?.status),
+  );
+
+const dashboardTaskCounts = (tasks) => ({
+  totalTasks: tasks.length,
+  openTasks: tasks.filter((task) => task.status === "open").length,
+  inProgressTasks: tasks.filter((task) => task.status === "in_progress").length,
+  reviewTasks: tasks.filter((task) => task.status === "review").length,
+  completedTasks: tasks.filter((task) => task.statusCategory === "closed")
+    .length,
+  approvedTasks: tasks.filter(hasRecordedApproval).length,
+  pendingTasks: tasks.filter(
+    (task) => task.isPending && !hasRecordedApproval(task),
+  ).length,
+  overdueTasks: tasks.filter((task) => task.isOverdue).length,
+});
 
 const userJson = (user) => {
   const data = typeof user?.toJSON === "function" ? user.toJSON() : user;
@@ -193,7 +216,7 @@ const getDashboardSummary = async (req, res) => {
   const taskQuery = await getTaskQueryForUser(req.user);
   const taskDocuments = await Task.find(taskQuery)
     .select(
-      "title project assignedTo dutyCompletedBy status startDate dueDate originalDueDate assignedAt createdAt",
+      "title project assignedTo dutyCompletedBy status startDate dueDate originalDueDate assignedAt approvedAt createdAt",
     )
     .populate("project", "title status color logoUrl")
     .populate("assignedTo", "name email role status priorityAccess");
@@ -225,19 +248,12 @@ const getDashboardSummary = async (req, res) => {
   const detailTasks = tasks.filter((task) =>
     (task.assignedTo || []).some((assignee) => sameId(assignee, detailUser)),
   );
+  const taskCounts = dashboardTaskCounts(tasks);
 
   res.json({
     summary: {
       totalProjects,
-      totalTasks: tasks.length,
-      openTasks: tasks.filter((task) => task.status === "open").length,
-      inProgressTasks: tasks.filter((task) => task.status === "in_progress")
-        .length,
-      reviewTasks: tasks.filter((task) => task.status === "review").length,
-      completedTasks: tasks.filter((task) => task.statusCategory === "closed")
-        .length,
-      pendingTasks: tasks.filter((task) => task.isPending).length,
-      overdueTasks: tasks.filter((task) => task.isOverdue).length,
+      ...taskCounts,
       myTasks: myTasks.length,
       userProgress,
       taskDetails:
@@ -253,7 +269,9 @@ const getDashboardSummary = async (req, res) => {
 };
 
 module.exports = {
+  dashboardTaskCounts,
   getDashboardSummary,
+  hasRecordedApproval,
   mergeDutyCompletionHistory,
   progressForUser,
 };

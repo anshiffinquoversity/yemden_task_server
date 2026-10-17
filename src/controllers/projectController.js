@@ -233,7 +233,7 @@ const listPublishedProjectAssets = async (req, res) => {
       status: { $in: ['published', 'delivered'] },
     }),
   )
-    .select('_id title metaAdStatus startDate dueDate')
+    .select('_id title category metaAdStatus startDate dueDate')
     .lean();
   const taskIds = tasks.map((task) => task._id);
 
@@ -289,6 +289,7 @@ const listPublishedProjectAssets = async (req, res) => {
         {
           taskId,
           taskTitle: String(task.title || '').trim(),
+          taskCategory: task.category || 'social_media_ads',
           metaAdStatus: task.metaAdStatus || 'none',
           taskStartDate: task.startDate || null,
           taskEndDate: task.dueDate || null,
